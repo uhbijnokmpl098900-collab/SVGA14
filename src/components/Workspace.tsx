@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { FileMetadata, MaterialAsset, AppSettings, UserRecord, PresetBackground } from '../types';
 import { Layers, Download, Copy } from 'lucide-react';
 import { logActivity } from '../utils/logger';
+import * as Mp4Muxer from 'mp4-muxer';
 
 declare var SVGA: any;
 declare var JSZip: any;
@@ -2801,8 +2802,9 @@ if (!this.JSON) { this.JSON = {}; }
             
             svgaInstance.pauseAnimation();
             const originalFrame = currentFrame;
+            // Use the actual FPS from the SVGA file if available to prevent frame mismatch/stuttering
+            const fps = svgaInstance.videoItem?.FPS || metadata.fps || 30;
             const totalFrames = svgaInstance.videoItem?.frames || metadata.frames || 0;
-            const fps = metadata.fps || 30;
             
             // Ensure even dimensions for video encoding
             const safeWidth = videoWidth % 2 === 0 ? videoWidth : videoWidth - 1;
@@ -2932,21 +2934,26 @@ if (!this.JSON) { this.JSON = {}; }
                 }
             }
 
-            const muxer = new WebMMuxer.Muxer({
-                target: new WebMMuxer.ArrayBufferTarget(),
+            // Use Mp4Muxer for true MP4 (H.264) support to avoid stuttering
+            const muxer = new Mp4Muxer.Muxer({
+                target: new Mp4Muxer.ArrayBufferTarget(),
                 video: {
-                    codec: 'V_VP9',
+                    codec: 'avc', // H.264
                     width: vapWidth,
                     height: vapHeight,
-                    frameRate: fps,
-                    alpha: false // VAP is opaque side-by-side
+                    frameRate: fps
                 },
-                audio: audioTrack
+                audio: audioTrack ? {
+                    codec: 'aac',
+                    numberOfChannels: 2,
+                    sampleRate: 48000
+                } : undefined,
+                fastStart: 'in-memory' // Optimize for streaming/playback
             });
 
             const videoEncoder = new VideoEncoder({
                 output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-                error: (e) => console.error(e)
+                error: (e) => console.error("VideoEncoder error:", e)
             });
 
             // Configure Audio Encoder if we have audio track
@@ -2957,7 +2964,7 @@ if (!this.JSON) { this.JSON = {}; }
                 });
 
                 audioEncoder.configure({
-                    codec: 'opus',
+                    codec: 'mp4a.40.2', // AAC
                     numberOfChannels: 2,
                     sampleRate: 48000,
                     bitrate: 128000
@@ -2971,34 +2978,57 @@ if (!this.JSON) { this.JSON = {}; }
                 await audioEncoder.flush();
             }
 
-            let bitrate = 15000000; // Default High
-            if (globalQuality === 'medium') bitrate = 8000000;
-            if (globalQuality === 'low') bitrate = 4000000;
+            // VAP Export Optimization
+            // 1. Bitrate: Increased significantly to prevent frame dropping/macroblocking at low settings.
+            //    VAP is double-width, so it needs roughly 2x the bitrate of a normal video.
+            let bitrate = 12000000; // 12 Mbps (High)
+            if (globalQuality === 'medium') bitrate = 8000000; // 8 Mbps
+            if (globalQuality === 'low') bitrate = 5000000; // 5 Mbps (Minimum safe for smooth playback)
 
-            videoEncoder.configure({
-                codec: 'vp09.00.10.08',
+            // 2. Codec Config: Use H.264 (AVC) with specific profile for mobile compatibility
+            const videoConfig: VideoEncoderConfig = {
+                codec: 'avc1.4d0028', // Main Profile Level 4.0 (Widely supported, good quality)
                 width: vapWidth,
                 height: vapHeight,
                 bitrate: bitrate,
-                alpha: 'discard'
-            });
+                framerate: fps,
+                latencyMode: 'quality', // Prioritize quality/smoothness over encoding speed
+                avc: { format: 'avc' }
+            };
+
+            // Check support and fallback if needed
+            const support = await VideoEncoder.isConfigSupported(videoConfig);
+            if (!support.supported) {
+                console.warn("H.264 Main Profile not supported, falling back to Baseline");
+                videoConfig.codec = 'avc1.42001E'; // Baseline
+            }
+
+            videoEncoder.configure(videoConfig);
 
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = safeWidth;
             tempCanvas.height = safeHeight;
             const tCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
 
+            // Frame Duration in Microseconds
+            const frameDurationMicros = Math.round(1000000 / fps);
+
             for (let i = 0; i < totalFrames; i++) {
                 svgaInstance.stepToFrame(i, true);
-                await new Promise(r => setTimeout(r, 50)); // Increased wait time for stability
+                
+                // Wait for frame rendering - use requestAnimationFrame to sync with paint if possible, 
+                // but here we use a small delay to allow SVGA to draw.
+                await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); // Wait for 2 frames
+                await new Promise(r => setTimeout(r, 50)); // And a safety buffer
 
-                if (videoEncoder.encodeQueueSize > 10) { // Lower threshold to prevent queue buildup
+                // Manage Encoder Queue - Keep it fed but not overflowing
+                if (videoEncoder.encodeQueueSize > 2) { 
                     await videoEncoder.flush();
                 }
 
                 // --- COMPOSITION START ---
                 cCtx.clearRect(0, 0, safeWidth, safeHeight);
-                vCtx?.clearRect(0, 0, vapWidth, vapHeight); // Clear VAP canvas
+                vCtx?.clearRect(0, 0, vapWidth, vapHeight);
 
                 // 1. Background
                 if (bgImg && bgImg.complete && bgImg.naturalWidth > 0) {
@@ -3049,7 +3079,6 @@ if (!this.JSON) { this.JSON = {}; }
                 // --- COMPOSITION END ---
 
                 // Prepare VAP Frame
-                // IMPORTANT: Fill with black first to ensure no transparency issues
                 vCtx.fillStyle = '#000000';
                 vCtx.fillRect(0, 0, vapWidth, vapHeight);
 
@@ -3061,7 +3090,6 @@ if (!this.JSON) { this.JSON = {}; }
                     tCtx.clearRect(0, 0, safeWidth, safeHeight);
                     tCtx.drawImage(compCanvas, 0, 0);
                     
-                    // Apply Edge Fade to Alpha Channel
                     applyTransparencyEffects(tCtx, safeWidth, safeHeight);
 
                     const imageData = tCtx.getImageData(0, 0, safeWidth, safeHeight);
@@ -3079,8 +3107,21 @@ if (!this.JSON) { this.JSON = {}; }
                 }
                 
                 const bitmap = await createImageBitmap(vapCanvas);
-                const frame = new VideoFrame(bitmap, { timestamp: (i * 1000000) / fps });
-                videoEncoder.encode(frame, { keyFrame: i % 30 === 0 });
+                
+                // Precise Timestamping
+                const timestamp = i * frameDurationMicros;
+                
+                const frame = new VideoFrame(bitmap, { 
+                    timestamp: timestamp, 
+                    duration: frameDurationMicros 
+                });
+                
+                // Keyframe Strategy:
+                // Force a keyframe at the start (0) and then every 1 second (fps).
+                // This ensures seekability and recovery from errors without bloating size too much.
+                const isKeyFrame = i === 0 || (i % fps === 0);
+
+                videoEncoder.encode(frame, { keyFrame: isKeyFrame });
                 frame.close();
                 bitmap.close();
 
@@ -3091,7 +3132,7 @@ if (!this.JSON) { this.JSON = {}; }
             muxer.finalize();
 
             const buffer = muxer.target.buffer;
-            const blob = new Blob([buffer], { type: 'video/webm' });
+            const blob = new Blob([buffer], { type: 'video/mp4' });
             const url = URL.createObjectURL(blob);
             
             setExportedVapUrl(url);
