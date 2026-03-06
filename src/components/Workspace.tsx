@@ -4441,39 +4441,63 @@ class _MyAppState extends State<MyApp> {
 
               {activeSideTab === 'optimize' && (
                 <div className="space-y-8 animate-in fade-in duration-300">
-                    <div className="bg-white/[0.03] p-6 rounded-[2rem] border border-white/5 space-y-6">
-                        <div className="flex flex-col gap-2">
-                           <h4 className="text-white font-black text-xs uppercase tracking-widest text-emerald-400">ضغط وتقليل حجم الملف</h4>
-                           <p className="text-[10px] text-slate-400 leading-relaxed">
-                               استخدم هذه الأداة لتقليل حجم ملف SVGA النهائي عن طريق ضغط الصور الداخلية (Quantization). يجب الضغط على الزر لتطبيق الضغط قبل التصدير.
-                           </p>
+                    <div className="bg-slate-950/40 p-6 rounded-[2rem] border border-white/5 space-y-6">
+                        <div className="flex items-center gap-2 mb-4">
+                            <div className="w-1 h-4 bg-emerald-500 rounded-full"></div>
+                            <h4 className="text-white font-black text-xs uppercase tracking-widest">إعدادات الضغط والسرعة</h4>
                         </div>
-                        
-                        <div className="space-y-4">
-                            <div className="flex justify-between items-center">
-                                <span className="text-slate-500 text-[10px] font-black uppercase">مستوى ضغط الصور</span>
-                                <span className="text-emerald-400 font-black text-xs">{optimizeQuality}%</span>
+
+                        <div className="grid gap-4">
+                            {/* Compression */}
+                            <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex items-center justify-between hover:bg-white/[0.07] transition-all group">
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider group-hover:text-emerald-400 transition-colors">نسبة الضغط</span>
+                                    <span className="text-[8px] text-slate-600">القيمة الأقل = حجم أصغر</span>
+                                </div>
+                                <div className="flex items-center bg-black/50 rounded-xl border border-white/10 px-4 py-2 group-hover:border-emerald-500/30 transition-all">
+                                    <input 
+                                        type="number" 
+                                        value={optimizeQuality}
+                                        onChange={(e) => setOptimizeQuality(Math.min(100, Math.max(1, parseInt(e.target.value) || 50)))}
+                                        className="w-12 bg-transparent text-center text-white font-mono font-bold text-lg outline-none"
+                                    />
+                                    <span className="text-emerald-500 font-bold text-xs ml-1">%</span>
+                                </div>
                             </div>
-                            <input 
-                                type="range" 
-                                min="0" max="100" step="5" 
-                                value={optimizeQuality} 
-                                onChange={(e) => setOptimizeQuality(parseInt(e.target.value))} 
-                                className="w-full h-2 bg-slate-800 rounded-full appearance-none cursor-pointer accent-emerald-500"
-                            />
-                            <div className="flex justify-between text-[8px] text-slate-600 font-black uppercase">
-                                <span>أقصى ضغط (حجم صغير)</span>
-                                <span>جودة أصلية (حجم كبير)</span>
+
+                            {/* FPS */}
+                            <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex items-center justify-between hover:bg-white/[0.07] transition-all group">
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider group-hover:text-purple-400 transition-colors">سرعة الإطارات</span>
+                                    <span className="text-[8px] text-slate-600">عدد الإطارات في الثانية</span>
+                                </div>
+                                <div className="flex items-center bg-black/50 rounded-xl border border-white/10 px-4 py-2 group-hover:border-purple-500/30 transition-all">
+                                    <input 
+                                        type="number" 
+                                        value={metadata.fps || 30}
+                                        onChange={(e) => setMetadata({...metadata, fps: Math.min(60, Math.max(1, parseInt(e.target.value) || 30))})}
+                                        className="w-12 bg-transparent text-center text-white font-mono font-bold text-lg outline-none"
+                                    />
+                                    <span className="text-purple-500 font-bold text-xs ml-1">FPS</span>
+                                </div>
                             </div>
                         </div>
 
                         <button 
                             onClick={handleOptimizeAssets}
                             disabled={isOptimizing}
-                            className={`w-full py-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isOptimizing ? 'bg-slate-800 text-slate-600' : 'bg-emerald-500 text-white shadow-glow-emerald hover:bg-emerald-400'}`}
+                            className={`w-full py-4 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2 ${isOptimizing ? 'bg-slate-800 text-slate-600' : 'bg-emerald-500 text-white shadow-glow-emerald hover:bg-emerald-400 hover:scale-[1.02]'}`}
                         >
-                            {isOptimizing ? 'جاري الضغط...' : 'تطبيق ضغط الصور الآن'}
+                            {isOptimizing ? (
+                                <>
+                                    <span className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                                    <span>جاري المعالجة...</span>
+                                </>
+                            ) : (
+                                'تطبيق التغييرات'
+                            )}
                         </button>
+                        
                         <p className="text-[8px] text-center text-slate-500 font-black uppercase tracking-widest mt-2">
                             ملاحظة: هذا الإجراء سيقوم بتعديل الصور الحالية في الذاكرة.
                         </p>
