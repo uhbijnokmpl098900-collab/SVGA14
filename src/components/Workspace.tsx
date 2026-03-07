@@ -13,6 +13,8 @@ declare var GIF: any;
 declare var UPNG: any;
 
 declare var WebMMuxer: any;
+declare var VideoEncoder: any;
+declare var VideoFrame: any;
 
 import { db } from '../lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
@@ -123,6 +125,19 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
 
   // ... (existing effects)
 
+  const [isVapMode, setIsVapMode] = useState(false);
+
+  // Clean up Blob URLs on unmount or when layerImages changes
+  useEffect(() => {
+    return () => {
+      Object.values(layerImages).forEach((url) => {
+        if ((url as string).startsWith('blob:')) {
+          URL.revokeObjectURL(url as string);
+        }
+      });
+    };
+  }, []);
+
   const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (!file) return;
@@ -130,6 +145,28 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
       // Log Upload Activity
       if (currentUser) {
         logActivity(currentUser, 'upload', `Uploaded video: ${file.name}`);
+      }
+
+      // Use the toggle state instead of confirm dialog if possible, or fallback to confirm if not set
+      let isVap = isVapMode;
+      if (!isVap) {
+          // Optional: still ask if not toggled, or just trust the toggle?
+          // Let's trust the toggle to avoid annoyance, but maybe the user forgot.
+          // For now, let's stick to the toggle being the source of truth for "VAP Mode".
+          // But if the user uploads a video without toggling, they get standard video.
+          // Let's keep the confirm as a fallback if the filename implies VAP? No, that's magic.
+          // Let's just use the confirm if the toggle is OFF, to be safe, or just rely on the toggle.
+          // The user complained about "finding it in vap format", so maybe they want explicit control.
+          // Let's use the confirm ONLY if the toggle is OFF.
+          isVap = confirm("هل هذا الفيديو يحتوي على قناة شفافية (VAP/Alpha)؟\nIs this a transparent video (VAP)?");
+      }
+
+      let vapLayout = 'rgb_left';
+      if (isVap) {
+          const layout = prompt("اختر تخطيط الفيديو:\n1. يسار: RGB | يمين: Alpha (افتراضي)\n2. يسار: Alpha | يمين: RGB\n3. أعلى: RGB | أسفل: Alpha\n4. أعلى: Alpha | أسفل: RGB", "1");
+          if (layout === "2") vapLayout = 'alpha_left';
+          if (layout === "3") vapLayout = 'rgb_top';
+          if (layout === "4") vapLayout = 'alpha_top';
       }
 
       const targetFps = parseInt(prompt("أدخل عدد الإطارات في الثانية (FPS):", "30") || "30");
@@ -157,12 +194,32 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
           setAudioFile(file);
 
           const canvas = document.createElement('canvas');
-          canvas.width = vw;
-          canvas.height = vh;
-          const ctx = canvas.getContext('2d');
+          const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+          let frameWidth = vw;
+          let frameHeight = vh;
+
+          if (isVap) {
+              if (vapLayout === 'rgb_left' || vapLayout === 'alpha_left') {
+                  frameWidth = Math.floor(vw / 2);
+                  frameHeight = vh;
+              } else {
+                  frameWidth = vw;
+                  frameHeight = Math.floor(vh / 2);
+              }
+          }
+
+          canvas.width = frameWidth;
+          canvas.height = frameHeight;
           
           const newLayerImages: Record<string, string> = {};
           const newSprites: any[] = [];
+          
+          // Temp canvas for VAP processing
+          const tempCanvas = document.createElement('canvas');
+          tempCanvas.width = vw;
+          tempCanvas.height = vh;
+          const tCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
           
           for (let i = 0; i < totalFrames; i++) {
               const time = i / targetFps;
@@ -172,11 +229,74 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
                   video.addEventListener('seeked', onSeek);
               });
               
-              if (ctx && video.readyState >= 2) {
-                  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                  const dataUrl = canvas.toDataURL('image/jpeg', targetQuality); // JPEG for video frames is smaller
+              if (ctx && tCtx && video.readyState >= 2) {
                   const key = `v_frame_${i}`;
-                  newLayerImages[key] = dataUrl;
+
+                  if (isVap) {
+                      // Draw full video frame
+                      tCtx.drawImage(video, 0, 0);
+                      
+                      // Extract RGB and Alpha
+                      let rgbX = 0, rgbY = 0, alphaX = 0, alphaY = 0;
+
+                      if (vapLayout === 'rgb_left') {
+                          rgbX = 0; alphaX = frameWidth;
+                      } else if (vapLayout === 'alpha_left') {
+                          rgbX = frameWidth; alphaX = 0;
+                      } else if (vapLayout === 'rgb_top') {
+                          rgbY = 0; alphaY = frameHeight;
+                      } else if (vapLayout === 'alpha_top') {
+                          rgbY = frameHeight; alphaY = 0;
+                      }
+                      
+                      const rgbData = tCtx.getImageData(rgbX, rgbY, frameWidth, frameHeight);
+                      const alphaData = tCtx.getImageData(alphaX, alphaY, frameWidth, frameHeight);
+                      
+                      // Merge
+                      const finalData = ctx.createImageData(frameWidth, frameHeight);
+                      for (let p = 0; p < finalData.data.length; p += 4) {
+                          const alphaVal = alphaData.data[p];
+                          
+                          if (alphaVal > 10) { // Threshold to remove compression noise
+                              const alphaFloat = alphaVal / 255;
+                              // Un-premultiply RGB (assuming video is premultiplied on black)
+                              finalData.data[p] = Math.min(255, Math.round(rgbData.data[p] / alphaFloat));     // R
+                              finalData.data[p+1] = Math.min(255, Math.round(rgbData.data[p+1] / alphaFloat)); // G
+                              finalData.data[p+2] = Math.min(255, Math.round(rgbData.data[p+2] / alphaFloat)); // B
+                              finalData.data[p+3] = alphaVal;
+                          } else {
+                              finalData.data[p] = 0;
+                              finalData.data[p+1] = 0;
+                              finalData.data[p+2] = 0;
+                              finalData.data[p+3] = 0;
+                          }
+                      }
+                      ctx.putImageData(finalData, 0, 0);
+                      
+                      // Use Blob URL to save memory
+                      await new Promise<void>(resolve => {
+                          canvas.toBlob(blob => {
+                              if (blob) {
+                                  const url = URL.createObjectURL(blob);
+                                  newLayerImages[key] = url;
+                              }
+                              resolve();
+                          }, 'image/png');
+                      });
+
+                  } else {
+                      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                      // Use Blob URL for standard video too
+                      await new Promise<void>(resolve => {
+                          canvas.toBlob(blob => {
+                              if (blob) {
+                                  const url = URL.createObjectURL(blob);
+                                  newLayerImages[key] = url;
+                              }
+                              resolve();
+                          }, 'image/jpeg', targetQuality);
+                      });
+                  }
                   
                   const frames = [];
                   for (let f = 0; f < totalFrames; f++) {
@@ -217,6 +337,11 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
               }
           });
           
+          // Revoke old URLs before setting new ones
+          Object.values(layerImages).forEach((url) => {
+              if ((url as string).startsWith('blob:')) URL.revokeObjectURL(url as string);
+          });
+
           setLayerImages(newLayerImages);
           setCustomLayers([]);
           setWatermark(null);
@@ -2774,6 +2899,347 @@ if (!this.JSON) { this.JSON = {}; }
     }
   };
 
+  const calculateChecksum = async (buffer: ArrayBuffer): Promise<string> => {
+      const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  const handleVAP105Export = async () => {
+    if (!metadata.videoItem) return;
+    
+    setIsExporting(true);
+    setExportPhase('جاري تحضير VAP 1.0.5...');
+
+    try {
+        const width = metadata.dimensions?.width || 750;
+        const height = metadata.dimensions?.height || 750;
+        const fps = metadata.fps || 30;
+        const totalFrames = metadata.frames || 0;
+        
+        // VAP Layout Calculation (Based on user request)
+        const gap = 4;
+        const alphaWidth = Math.floor(width / 2);
+        const alphaHeight = Math.floor(height / 2);
+        
+        // Align to 16px
+        const videoW = Math.ceil((width + gap + alphaWidth) / 16) * 16;
+        const videoH = Math.ceil(height / 16) * 16;
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = videoW;
+        canvas.height = videoH;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        
+        if (!ctx) throw new Error("Canvas context not supported");
+
+        // Calculate Video Duration
+        const videoDuration = totalFrames / fps;
+        const maxAudioDuration = videoDuration;
+
+        // Audio Setup
+        let audioEncoder: AudioEncoder | null = null;
+        let audioTrack: any = undefined;
+        let audioDataChunks: AudioData[] = [];
+
+        // Try to process audio first
+        if (audioFile || audioUrl) {
+            try {
+                let arrayBuffer: ArrayBuffer | null = null;
+                if (audioFile) {
+                    arrayBuffer = await audioFile.arrayBuffer();
+                } else if (audioUrl) {
+                    const resp = await fetch(audioUrl);
+                    arrayBuffer = await resp.arrayBuffer();
+                }
+
+                if (arrayBuffer && arrayBuffer.byteLength > 0) {
+                    const offlineCtx = new OfflineAudioContext(2, 48000 * 1, 48000); 
+                    const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer);
+                    
+                    audioTrack = {
+                        codec: 'mp4a.40.2',
+                        numberOfChannels: 2,
+                        sampleRate: 48000
+                    };
+
+                    const numberOfChannels = 2;
+                    const sampleRate = audioBuffer.sampleRate;
+                    const maxSamples = Math.floor(maxAudioDuration * sampleRate);
+                    const length = Math.min(audioBuffer.length, maxSamples);
+                    const planarBuffer = new Float32Array(length * numberOfChannels);
+                    
+                    for (let c = 0; c < numberOfChannels; c++) {
+                        const channelData = audioBuffer.numberOfChannels > c ? audioBuffer.getChannelData(c) : audioBuffer.getChannelData(0);
+                        planarBuffer.set(channelData.subarray(0, length), c * length);
+                    }
+
+                    const chunkSize = sampleRate;
+                    for (let i = 0; i < length; i += chunkSize) {
+                        const currentChunkSize = Math.min(chunkSize, length - i);
+                        const chunkBuffer = new Float32Array(currentChunkSize * numberOfChannels);
+                        for (let c = 0; c < numberOfChannels; c++) {
+                            const start = c * length + i;
+                            const end = start + currentChunkSize;
+                            chunkBuffer.set(planarBuffer.subarray(start, end), c * currentChunkSize);
+                        }
+                        audioDataChunks.push(new AudioData({
+                            format: 'f32-planar',
+                            sampleRate: sampleRate,
+                            numberOfFrames: currentChunkSize,
+                            numberOfChannels: numberOfChannels,
+                            timestamp: (i / sampleRate) * 1000000,
+                            data: chunkBuffer
+                        }));
+                    }
+                }
+            } catch (audioError) {
+                console.warn("Audio processing failed, continuing without audio:", audioError);
+                audioTrack = undefined;
+                audioDataChunks = [];
+            }
+        }
+
+        // Mp4Muxer Setup
+        const muxer = new Mp4Muxer.Muxer({
+            target: new Mp4Muxer.ArrayBufferTarget(),
+            video: {
+                codec: 'avc',
+                width: videoW,
+                height: videoH
+            },
+            audio: audioTrack ? {
+                codec: 'aac',
+                numberOfChannels: 2,
+                sampleRate: 48000
+            } : undefined,
+            fastStart: 'in-memory'
+        });
+
+        let hasEncoderError = false;
+        const videoEncoder = new VideoEncoder({
+            output: (chunk: any, meta: any) => muxer.addVideoChunk(chunk, meta),
+            error: (e: any) => {
+                console.error("VideoEncoder error:", e);
+                hasEncoderError = true;
+            }
+        });
+
+        if (audioTrack) {
+             audioEncoder = new AudioEncoder({
+                output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+                error: (e) => console.error("AudioEncoder error:", e)
+            });
+
+            audioEncoder.configure({
+                codec: 'mp4a.40.2',
+                numberOfChannels: 2,
+                sampleRate: 48000,
+                bitrate: 128000
+            });
+
+            for (const chunk of audioDataChunks) {
+                audioEncoder.encode(chunk);
+                chunk.close();
+            }
+            await audioEncoder.flush();
+        }
+
+        // Calculate total pixels to determine appropriate AVC level
+        const totalPixels = videoW * videoH;
+        // Level 4.2 limit is roughly 2,228,224 pixels (8704 macroblocks * 256)
+        // If higher, use Level 5.1 (avc1.4d0033) which supports up to ~9.4MP (4K)
+        // Hex 33 = Decimal 51 (Level 5.1)
+        const codec = totalPixels > 2228224 ? 'avc1.4d0033' : 'avc1.4d002a';
+
+        videoEncoder.configure({
+            codec: codec,
+            width: videoW,
+            height: videoH,
+            bitrate: 8000000, // 8 Mbps
+            framerate: fps
+        });
+
+        // Preload Images
+        const images: Record<string, HTMLImageElement> = {};
+        const loadImage = (src: string): Promise<HTMLImageElement> => {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.onload = () => resolve(img);
+                img.onerror = () => resolve(img);
+                img.src = src;
+            });
+        };
+
+        // Load all used images
+        const uniqueKeys = new Set<string>();
+        (metadata.videoItem.sprites || []).forEach((s: any) => uniqueKeys.add(s.imageKey));
+        
+        for (const key of uniqueKeys) {
+            const src = layerImages[key] || (metadata.videoItem.images && metadata.videoItem.images[key]);
+            if (src) {
+                let url = src;
+                if (src instanceof Uint8Array) {
+                     let binary = '';
+                     const len = src.byteLength;
+                     for (let k = 0; k < len; k++) binary += String.fromCharCode(src[k]);
+                     url = `data:image/png;base64,${btoa(binary)}`;
+                }
+                images[key] = await loadImage(url);
+            }
+        }
+
+        // Render Loop
+        const frameDuration = 1000000 / fps; // Microseconds
+        
+        for (let i = 0; i < totalFrames; i++) {
+            setExportPhase(`جاري معالجة الإطار ${i + 1}/${totalFrames}`);
+            
+            ctx.clearRect(0, 0, videoW, videoH);
+            
+            // 1. Draw RGB Frame at (0,0)
+            const sprites = metadata.videoItem.sprites || [];
+            
+            const frameCanvas = document.createElement('canvas');
+            frameCanvas.width = width;
+            frameCanvas.height = height;
+            const fCtx = frameCanvas.getContext('2d');
+            
+            if (fCtx) {
+                for (const sprite of sprites) {
+                    const frame = sprite.frames[i];
+                    if (!frame || frame.alpha <= 0.01) continue;
+                    
+                    const img = images[sprite.imageKey];
+                    if (!img) continue;
+                    
+                    const t = frame.transform || { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 };
+                    const l = frame.layout || { x: 0, y: 0, width: img.width, height: img.height };
+                    
+                    fCtx.save();
+                    fCtx.globalAlpha = frame.alpha;
+                    if (frame.blendMode) fCtx.globalCompositeOperation = frame.blendMode;
+                    
+                    fCtx.transform(t.a, t.b, t.c, t.d, t.tx, t.ty);
+                    fCtx.drawImage(img, l.x, l.y, l.width, l.height);
+                    fCtx.restore();
+                }
+                
+                // Draw RGB to main canvas
+                ctx.drawImage(frameCanvas, 0, 0);
+                
+                // 2. Extract Alpha and Draw
+                const frameData = fCtx.getImageData(0, 0, width, height);
+                const alphaCanvas = document.createElement('canvas');
+                alphaCanvas.width = width;
+                alphaCanvas.height = height;
+                const aCtx = alphaCanvas.getContext('2d');
+                
+                if (aCtx) {
+                    const alphaImageData = aCtx.createImageData(width, height);
+                    const d = frameData.data;
+                    const ad = alphaImageData.data;
+                    for (let p = 0; p < d.length; p += 4) {
+                        const a = d[p + 3];
+                        ad[p] = a;     // R
+                        ad[p + 1] = a; // G
+                        ad[p + 2] = a; // B
+                        ad[p + 3] = 255; // Alpha
+                    }
+                    aCtx.putImageData(alphaImageData, 0, 0);
+                    
+                    // Draw scaled alpha to main canvas
+                    ctx.drawImage(alphaCanvas, width + gap, 0, alphaWidth, alphaHeight);
+                }
+            }
+
+            // Create VideoFrame
+            if (hasEncoderError) throw new Error("Video encoding failed");
+            const videoFrame = new VideoFrame(canvas, { timestamp: i * frameDuration });
+            videoEncoder.encode(videoFrame, { keyFrame: i % 30 === 0 });
+            videoFrame.close();
+            
+            // Yield to UI
+            await new Promise(r => setTimeout(r, 0));
+        }
+        
+        await videoEncoder.flush();
+        muxer.finalize();
+        
+        // Generate JSON Config
+        const jsonConfig = {
+            info: {
+                v: 2,
+                f: totalFrames,
+                w: width,
+                h: height,
+                fps: fps,
+                videoW: videoW,
+                videoH: videoH,
+                aFrame: [width + gap, 0, alphaWidth, alphaHeight],
+                rgbFrame: [0, 0, width, height],
+                isVapx: 0,
+                codeTag: ["common"],
+                orien: 0
+            }
+        };
+
+        const jsonStr = JSON.stringify(jsonConfig);
+        
+        // Create vapc box
+        const jsonBytes = new TextEncoder().encode(jsonStr);
+        const boxSize = 8 + jsonBytes.length;
+        const boxBuffer = new Uint8Array(boxSize);
+        const view = new DataView(boxBuffer.buffer);
+        
+        view.setUint32(0, boxSize);
+        view.setUint8(4, 0x76); // v
+        view.setUint8(5, 0x61); // a
+        view.setUint8(6, 0x70); // p
+        view.setUint8(7, 0x63); // c
+        
+        boxBuffer.set(jsonBytes, 8);
+        
+        // Combine buffers (Append vapc box to the end of the file)
+        const muxerBuffer = muxer.target.buffer;
+        const finalBuffer = new Uint8Array(muxerBuffer.byteLength + boxSize);
+        finalBuffer.set(new Uint8Array(muxerBuffer), 0);
+        finalBuffer.set(boxBuffer, muxerBuffer.byteLength);
+        
+        const buffer = finalBuffer.buffer;
+        const checksum = await calculateChecksum(buffer);
+        
+        // Download Files
+        const timestamp = new Date().getTime();
+        const baseName = `vap_export_${timestamp}`;
+        
+        // 1. Video (with embedded vapc)
+        const videoBlob = new Blob([buffer], { type: 'video/mp4' });
+        const videoUrl = URL.createObjectURL(videoBlob);
+        const videoLink = document.createElement('a');
+        videoLink.href = videoUrl;
+        videoLink.download = `${baseName}.mp4`;
+        videoLink.click();
+        
+        // 3. Checksum (SHA-256)
+        const checksumBlob = new Blob([checksum], { type: 'text/plain' });
+        const checksumUrl = URL.createObjectURL(checksumBlob);
+        const checksumLink = document.createElement('a');
+        checksumLink.href = checksumUrl;
+        checksumLink.download = `${baseName}.sha256`;
+        checksumLink.click();
+
+        alert("تم تصدير ملفات VAP 1.0.5 بنجاح!");
+
+    } catch (e) {
+        console.error(e);
+        alert("حدث خطأ أثناء تصدير VAP: " + (e as any).message);
+    } finally {
+        setIsExporting(false);
+    }
+  };
+
   const handleMainExport = async () => {
     if (!currentUser) {
       onLoginRequired();
@@ -2791,6 +3257,7 @@ if (!this.JSON) { this.JSON = {}; }
     else if (selectedFormat === 'GIF (Animation)') await handleExportGIF();
     else if (selectedFormat === 'APNG (Animation)') await handleExportAPNG();
     else if (selectedFormat === 'WebM (Video)') await handleExportWebM();
+    else if (selectedFormat === 'VAP 1.0.5') await handleVAP105Export();
     else if (selectedFormat === 'VAP (MP4)') {
         setIsExporting(true);
         setExportPhase('جاري إنشاء فيديو VAP (Alpha+RGB)...');
@@ -3333,10 +3800,19 @@ if (!this.JSON) { this.JSON = {}; }
             for (const layer of backLayers) {
                 try {
                     const layerKey = layer.id;
-                    if (!layer.url.includes(',')) continue; // Skip if not data URI
-                    const binary = atob(layer.url.split(',')[1]);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                    let bytes: Uint8Array | null = null;
+
+                    if (layer.url.startsWith('blob:')) {
+                        const response = await fetch(layer.url);
+                        const arrayBuffer = await response.arrayBuffer();
+                        bytes = new Uint8Array(arrayBuffer);
+                    } else if (layer.url.includes(',')) {
+                        const binary = atob(layer.url.split(',')[1]);
+                        bytes = new Uint8Array(binary.length);
+                        for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                    }
+
+                    if (!bytes) continue;
                     imagesData[layerKey] = bytes;
 
                     const finalWidth = layer.width * layer.scale;
@@ -3362,10 +3838,19 @@ if (!this.JSON) { this.JSON = {}; }
             for (const layer of frontLayers) {
                 try {
                     const layerKey = layer.id;
-                    if (!layer.url.includes(',')) continue;
-                    const binary = atob(layer.url.split(',')[1]);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                    let bytes: Uint8Array | null = null;
+
+                    if (layer.url.startsWith('blob:')) {
+                        const response = await fetch(layer.url);
+                        const arrayBuffer = await response.arrayBuffer();
+                        bytes = new Uint8Array(arrayBuffer);
+                    } else if (layer.url.includes(',')) {
+                        const binary = atob(layer.url.split(',')[1]);
+                        bytes = new Uint8Array(binary.length);
+                        for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                    }
+
+                    if (!bytes) continue;
                     imagesData[layerKey] = bytes;
 
                     const finalWidth = layer.width * layer.scale;
@@ -3549,13 +4034,19 @@ if (!this.JSON) { this.JSON = {}; }
         <div className="xl:col-span-7 flex flex-col gap-0 overflow-visible">
           <div className="relative flex items-center justify-center w-full overflow-hidden rounded-[3rem] border border-white/10 shadow-3xl bg-black/20" style={{ height: `${videoHeight * scale}px` }}>
               <div ref={containerRef} className="absolute inset-0 flex items-center justify-center transition-transform duration-500 ease-out origin-center pointer-events-none" style={{ transform: `scale(${scale})` }}>
-                  <div className="relative overflow-hidden shadow-2xl bg-slate-950 pointer-events-auto" style={{ 
+                  <div className="relative overflow-hidden shadow-2xl pointer-events-auto" style={{ 
                       width: `${videoWidth}px`, 
                       height: `${videoHeight}px`, 
-                      backgroundImage: previewBg ? `url(${previewBg})` : 'none', 
-                      backgroundSize: `${bgScale}%`, 
-                      backgroundRepeat: 'no-repeat', 
-                      backgroundPosition: `${bgPos.x}% ${bgPos.y}%`, 
+                      backgroundImage: previewBg ? `url(${previewBg})` : `
+                        linear-gradient(45deg, #334155 25%, transparent 25%), 
+                        linear-gradient(-45deg, #334155 25%, transparent 25%), 
+                        linear-gradient(45deg, transparent 75%, #334155 75%), 
+                        linear-gradient(-45deg, transparent 75%, #334155 75%)
+                      `,
+                      backgroundSize: previewBg ? `${bgScale}%` : '20px 20px',
+                      backgroundRepeat: previewBg ? 'no-repeat' : 'repeat', 
+                      backgroundPosition: previewBg ? `${bgPos.x}% ${bgPos.y}%` : '0 0, 0 10px, 10px -10px, -10px 0px', 
+                      backgroundColor: previewBg ? 'transparent' : '#0f172a',
                       boxShadow: '0 0 100px rgba(0,0,0,0.5), inset 0 0 50px rgba(0,0,0,0.5)', 
                       border: previewBg ? 'none' : '2px solid rgba(255,255,255,0.05)',
                       maskImage: (fadeConfig.top > 0 || fadeConfig.bottom > 0 || fadeConfig.left > 0 || fadeConfig.right > 0) ? `
@@ -3689,6 +4180,15 @@ if (!this.JSON) { this.JSON = {}; }
                                 }} className="px-4 py-2 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase shadow-glow-red">حذف المحدد ({selectedKeys.size})</button>
                             )}
                             <button onClick={() => layerInputRef.current?.click()} className="px-4 py-2 bg-sky-500 text-white rounded-xl text-[10px] font-black uppercase shadow-glow-sky">+ إضافة طبقة</button>
+                        </div>
+                    </div>
+                    
+                    {/* VAP Toggle */}
+                    <div className="flex items-center gap-2 mb-4 p-3 bg-white/5 rounded-xl border border-white/5">
+                        <div className="relative inline-flex items-center cursor-pointer" onClick={() => setIsVapMode(!isVapMode)}>
+                            <input type="checkbox" className="sr-only peer" checked={isVapMode} readOnly />
+                            <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+                            <span className="mr-3 text-xs font-bold text-slate-300">استيراد فيديو شفاف (VAP)</span>
                         </div>
                     </div>
                     
@@ -4436,7 +4936,17 @@ class _MyAppState extends State<MyApp> {
                     {exportedVapUrl && (
                         <div className="space-y-4 pt-6 border-t border-white/5 animate-in fade-in slide-in-from-bottom-4">
                             <h4 className="text-white font-black text-xs uppercase tracking-widest text-sky-400">معاينة VAP (MP4)</h4>
-                            <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-black/40 aspect-video flex items-center justify-center">
+                            <div className="relative rounded-2xl overflow-hidden border border-white/10 aspect-video flex items-center justify-center" style={{
+                                backgroundImage: `
+                                    linear-gradient(45deg, #334155 25%, transparent 25%), 
+                                    linear-gradient(-45deg, #334155 25%, transparent 25%), 
+                                    linear-gradient(45deg, transparent 75%, #334155 75%), 
+                                    linear-gradient(-45deg, transparent 75%, #334155 75%)
+                                `,
+                                backgroundSize: '20px 20px',
+                                backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
+                                backgroundColor: '#0f172a'
+                            }}>
                                 <VapPlayer 
                                     src={exportedVapUrl} 
                                     width={videoWidth}
@@ -4545,8 +5055,14 @@ class _MyAppState extends State<MyApp> {
                     </div>
                 </div>
               )}
+              <button 
+                onClick={handleVAP105Export}
+                className="w-full py-4 mb-4 bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-black rounded-xl shadow-glow-purple active:scale-95 flex items-center justify-center gap-2 transition-all hover:scale-[1.02]"
+             >
+                🚀 تصدير VAP 1.0.5 (خاص)
+             </button>
              <div className="flex flex-wrap gap-2">
-                {['AE Project', 'SVGA 2.0', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP (MP4)'].map(f => (
+                {['AE Project', 'SVGA 2.0', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP (MP4)', 'VAP 1.0.5'].map(f => (
                   <button key={f} onClick={() => setSelectedFormat(f)} className={`flex-1 py-3 px-2 rounded-xl text-[9px] font-black border transition-all whitespace-nowrap ${selectedFormat === f ? 'bg-sky-500 text-white border-sky-400' : 'bg-slate-950/40 text-slate-300'}`}>{f}</button>
                 ))}
              </div>

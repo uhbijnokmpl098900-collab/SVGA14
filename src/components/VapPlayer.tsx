@@ -32,16 +32,16 @@ export const VapPlayer: React.FC<VapPlayerProps> = ({ src, width, height, classN
             }
         `;
 
-        // Fragment Shader for Side-by-Side (Left: Alpha, Right: RGB)
+        // Fragment Shader for Side-by-Side (Left: RGB, Right: Alpha)
         const fsSource = `
             precision mediump float;
             uniform sampler2D u_image;
             varying vec2 v_texCoord;
             void main() {
-                // RGB is on the Right (0.5 to 1.0)
-                vec2 rgbUV = vec2(v_texCoord.x * 0.5 + 0.5, v_texCoord.y);
-                // Alpha is on the Left (0.0 to 0.5)
-                vec2 alphaUV = vec2(v_texCoord.x * 0.5, v_texCoord.y);
+                // RGB is on the Left (0.0 to 0.5)
+                vec2 rgbUV = vec2(v_texCoord.x * 0.5, v_texCoord.y);
+                // Alpha is on the Right (0.5 to 1.0)
+                vec2 alphaUV = vec2(v_texCoord.x * 0.5 + 0.5, v_texCoord.y);
                 
                 vec4 color = texture2D(u_image, rgbUV);
                 vec4 alpha = texture2D(u_image, alphaUV);

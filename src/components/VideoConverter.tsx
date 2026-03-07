@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { logActivity } from '../utils/logger';
 
+import * as Mp4Muxer from 'mp4-muxer';
+
 declare var SVGA: any;
 declare var protobuf: any;
 declare var pako: any;
@@ -59,6 +61,7 @@ export const VideoConverter: React.FC<VideoConverterProps> = ({ currentUser, onC
 
   const formats = [
     { id: 'VAP (MP4)', name: 'VAP (Alpha+RGB)', icon: '📹', cost: 1, desc: 'فيديو مع قناة شفافية منفصلة' },
+    { id: 'VAP 1.0.5', name: 'VAP 1.0.5 (Special)', icon: '🚀', cost: 1, desc: 'تصدير خاص VAP 1.0.5' },
     { id: 'SVGA 2.0', name: 'SVGA Animation', icon: '📦', cost: 1, desc: 'ملف SVGA متوافق مع تطبيقات البث' },
     { id: 'GIF (Animation)', name: 'GIF الشفاف', icon: '🖼️', cost: 1, desc: 'صور متحركة للمواقع والدردشة' },
     { id: 'APNG (Animation)', name: 'APNG الشفاف', icon: '🎞️', cost: 1, desc: 'جودة أعلى من GIF مع شفافية كاملة' },
@@ -92,11 +95,12 @@ export const VideoConverter: React.FC<VideoConverterProps> = ({ currentUser, onC
       if (currentFade.left > 0 && x < fadeLeftLimit) edgeAlpha *= (x / fadeLeftLimit);
       if (currentFade.right > 0 && x > fadeRightLimit) edgeAlpha *= ((width - x) / (width - fadeRightLimit));
 
-      // 2. Remove Black Logic (Enhanced)
+      // 2. Remove Black Logic (Enhanced with Tolerance)
       if (removeBlack) {
         const brightness = (r + g + b) / 3;
-        if (brightness < 80) {
-          const factor = brightness / 80;
+        const threshold = whiteTolerance * 3; // 30 -> 90
+        if (brightness < threshold) {
+          const factor = brightness / threshold;
           a = Math.min(a, 255 * factor);
           
           // Brighten to avoid dark fringes
@@ -107,18 +111,18 @@ export const VideoConverter: React.FC<VideoConverterProps> = ({ currentUser, onC
         }
       }
 
-      // 3. Remove Green Logic (Chroma Key)
+      // 3. Remove Green Logic (Chroma Key with Tolerance)
       if (removeGreen) {
-        // Simple Green Screen Logic: Green dominates Red and Blue
-        // Adjust thresholds as needed. Standard green screen is (0, 255, 0)
-        // Condition: G is significantly larger than R and B
-        if (g > 100 && g > r + 40 && g > b + 40) {
-            // Calculate alpha based on how "green" it is
-            // Smooth transition
+        // Adjust sensitivity based on tolerance
+        // Tolerance 30 -> diff 40
+        // Tolerance 50 -> diff 20
+        // Tolerance 10 -> diff 60
+        const sensitivity = Math.max(10, 70 - whiteTolerance);
+        
+        if (g > 100 && g > r + sensitivity && g > b + sensitivity) {
             const dominance = Math.min((g - Math.max(r, b)), 100) / 100; 
             a = Math.min(a, 255 * (1 - dominance));
             
-            // Color spill reduction (desaturate green fringes)
             if (a < 255) {
                 g = Math.min(g, Math.max(r, b));
             }
@@ -127,35 +131,23 @@ export const VideoConverter: React.FC<VideoConverterProps> = ({ currentUser, onC
 
       // 4. Remove White Logic (Professional & Color Safe)
       if (removeWhite) {
-        // Calculate distance from pure white (255, 255, 255)
         const dist = Math.sqrt(
           Math.pow(255 - r, 2) + 
           Math.pow(255 - g, 2) + 
           Math.pow(255 - b, 2)
         );
 
-        // Calculate Saturation (Color Intensity)
-        // White/Gray has very low saturation (R ~= G ~= B)
         const max = Math.max(r, g, b);
         const min = Math.min(r, g, b);
         const saturation = max - min;
-
-        // Thresholds
-        // 1. Distance Threshold: User controlled (whiteTolerance)
-        // 2. Saturation Threshold: Fixed low value (e.g. 20) to ensure we only target white/gray
-        //    If saturation is high (> 20), it's a color (even if bright), so we PROTECT it.
         
         if (saturation < 20) {
-            const threshold = whiteTolerance * 1.5; // Scale up a bit for better control range (0-100 -> 0-150)
-            const softness = 20; // Smooth edge transition
+            const threshold = whiteTolerance * 1.5; 
+            const softness = 20; 
 
             if (dist < threshold) {
-                // Inside the white range -> Transparent
                 a = 0;
             } else if (dist < threshold + softness) {
-                // Edge transition -> Fade out
-                // dist = threshold -> alpha = 0
-                // dist = threshold + softness -> alpha = original alpha
                 const factor = (dist - threshold) / softness;
                 a = Math.min(a, 255 * factor);
             }
@@ -214,6 +206,8 @@ export const VideoConverter: React.FC<VideoConverterProps> = ({ currentUser, onC
 
       if (selectedFormat === 'VAP (MP4)') {
         await exportToVAP(video, vw, vh, totalFrames, fps, audioData);
+      } else if (selectedFormat === 'VAP 1.0.5') {
+        await exportToVAP105(video, vw, vh, totalFrames, fps, audioData);
       } else if (selectedFormat === 'SVGA 2.0') {
         await exportToSVGA(video, vw, vh, totalFrames, fps, audioData);
       } else if (selectedFormat === 'GIF (Animation)') {
@@ -239,6 +233,268 @@ export const VideoConverter: React.FC<VideoConverterProps> = ({ currentUser, onC
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const calculateChecksum = async (buffer: ArrayBuffer): Promise<string> => {
+      const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  };
+
+  const exportToVAP105 = async (video: HTMLVideoElement, vw: number, vh: number, totalFrames: number, fps: number, audioData: Uint8Array | null) => {
+    setPhase('جاري تحضير VAP 1.0.5...');
+    
+    // VAP Layout Calculation
+    const width = vw;
+    const height = vh;
+    const gap = 4;
+    const alphaWidth = Math.floor(width / 2);
+    const alphaHeight = Math.floor(height / 2);
+    
+    // Align to 16px
+    const videoW = Math.ceil((width + gap + alphaWidth) / 16) * 16;
+    const videoH = Math.ceil(height / 16) * 16;
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = videoW;
+    canvas.height = videoH;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    
+    if (!ctx) throw new Error("Canvas context not supported");
+
+    // Audio Setup
+    let audioEncoder: AudioEncoder | null = null;
+    let audioTrack: any = undefined;
+    let audioDataChunks: AudioData[] = [];
+
+    if (audioData) {
+        try {
+            const offlineCtx = new OfflineAudioContext(2, 48000 * 1, 48000); 
+            const audioBuffer = await offlineCtx.decodeAudioData(audioData.buffer.slice(0));
+            
+            audioTrack = {
+                codec: 'mp4a.40.2',
+                numberOfChannels: 2,
+                sampleRate: 48000
+            };
+
+            const numberOfChannels = 2;
+            const sampleRate = audioBuffer.sampleRate;
+            const length = audioBuffer.length;
+            const planarBuffer = new Float32Array(length * numberOfChannels);
+            
+            for (let c = 0; c < numberOfChannels; c++) {
+                const channelData = audioBuffer.numberOfChannels > c ? audioBuffer.getChannelData(c) : audioBuffer.getChannelData(0);
+                planarBuffer.set(channelData, c * length);
+            }
+
+            const chunkSize = sampleRate;
+            for (let i = 0; i < length; i += chunkSize) {
+                const currentChunkSize = Math.min(chunkSize, length - i);
+                const chunkBuffer = new Float32Array(currentChunkSize * numberOfChannels);
+                for (let c = 0; c < numberOfChannels; c++) {
+                    const start = c * length + i;
+                    const end = start + currentChunkSize;
+                    chunkBuffer.set(planarBuffer.subarray(start, end), c * currentChunkSize);
+                }
+                audioDataChunks.push(new AudioData({
+                    format: 'f32-planar',
+                    sampleRate: sampleRate,
+                    numberOfFrames: currentChunkSize,
+                    numberOfChannels: numberOfChannels,
+                    timestamp: (i / sampleRate) * 1000000,
+                    data: chunkBuffer
+                }));
+            }
+        } catch (audioError) {
+            console.warn("Audio processing failed, continuing without audio:", audioError);
+            audioTrack = undefined;
+            audioDataChunks = [];
+        }
+    }
+
+    // Mp4Muxer Setup
+    const muxer = new Mp4Muxer.Muxer({
+        target: new Mp4Muxer.ArrayBufferTarget(),
+        video: {
+            codec: 'avc',
+            width: videoW,
+            height: videoH
+        },
+        audio: audioTrack ? {
+            codec: 'aac',
+            numberOfChannels: 2,
+            sampleRate: 48000
+        } : undefined,
+        fastStart: 'in-memory'
+    });
+
+    let hasEncoderError = false;
+    const videoEncoder = new VideoEncoder({
+        output: (chunk: any, meta: any) => muxer.addVideoChunk(chunk, meta),
+        error: (e: any) => {
+            console.error("VideoEncoder error:", e);
+            hasEncoderError = true;
+        }
+    });
+
+    if (audioTrack && audioDataChunks.length > 0) {
+         audioEncoder = new AudioEncoder({
+            output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+            error: (e) => console.error("AudioEncoder error:", e)
+        });
+
+        audioEncoder.configure({
+            codec: 'mp4a.40.2',
+            numberOfChannels: 2,
+            sampleRate: 48000,
+            bitrate: 128000
+        });
+
+        for (const chunk of audioDataChunks) {
+            audioEncoder.encode(chunk);
+            chunk.close();
+        }
+        await audioEncoder.flush();
+    }
+
+    const totalPixels = videoW * videoH;
+    const codec = totalPixels > 2228224 ? 'avc1.4d0033' : 'avc1.4d002a';
+
+    videoEncoder.configure({
+        codec: codec,
+        width: videoW,
+        height: videoH,
+        bitrate: globalQuality === 'high' ? 8000000 : globalQuality === 'medium' ? 4000000 : 1500000,
+        framerate: fps
+    });
+
+    const frameDuration = 1000000 / fps; // Microseconds
+    
+    // Temp canvas for processing source frame
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const tCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+
+    for (let i = 0; i < totalFrames; i++) {
+        setPhase(`جاري معالجة الإطار ${i + 1}/${totalFrames}`);
+        
+        video.currentTime = i / fps;
+        await new Promise(r => {
+            const onSeek = () => { video.removeEventListener('seeked', onSeek); r(null); };
+            video.addEventListener('seeked', onSeek);
+        });
+
+        if (ctx && tCtx) {
+            ctx.fillStyle = '#000000';
+            ctx.fillRect(0, 0, videoW, videoH);
+            
+            // 1. Draw Source Frame
+            tCtx.clearRect(0, 0, width, height);
+            tCtx.drawImage(video, 0, 0, width, height);
+            
+            // Apply transparency effects
+            applyTransparencyEffects(tCtx, width, height);
+            
+            // 2. Draw RGB to main canvas (Left)
+            ctx.drawImage(tempCanvas, 0, 0);
+            
+            // 3. Extract Alpha and Draw (Right)
+            const frameData = tCtx.getImageData(0, 0, width, height);
+            const alphaCanvas = document.createElement('canvas');
+            alphaCanvas.width = width;
+            alphaCanvas.height = height;
+            const aCtx = alphaCanvas.getContext('2d');
+            
+            if (aCtx) {
+                const alphaImageData = aCtx.createImageData(width, height);
+                const d = frameData.data;
+                const ad = alphaImageData.data;
+                for (let p = 0; p < d.length; p += 4) {
+                    const a = d[p + 3];
+                    ad[p] = a;     // R
+                    ad[p + 1] = a; // G
+                    ad[p + 2] = a; // B
+                    ad[p + 3] = 255; // Alpha
+                }
+                aCtx.putImageData(alphaImageData, 0, 0);
+                
+                // Draw scaled alpha to main canvas
+                ctx.drawImage(alphaCanvas, width + gap, 0, alphaWidth, alphaHeight);
+            }
+        }
+
+        // Create VideoFrame
+        if (hasEncoderError) throw new Error("Video encoding failed");
+        const videoFrame = new VideoFrame(canvas, { timestamp: i * frameDuration });
+        videoEncoder.encode(videoFrame, { keyFrame: i % 30 === 0 });
+        videoFrame.close();
+        
+        // Yield to UI
+        await new Promise(r => setTimeout(r, 0));
+        setProgress(Math.floor((i / totalFrames) * 100));
+    }
+    
+    await videoEncoder.flush();
+    muxer.finalize();
+    
+    // Generate JSON Config
+    const jsonConfig = {
+        info: {
+            v: 2,
+            f: totalFrames,
+            w: width,
+            h: height,
+            fps: fps,
+            videoW: videoW,
+            videoH: videoH,
+            aFrame: [width + gap, 0, alphaWidth, alphaHeight],
+            rgbFrame: [0, 0, width, height],
+            isVapx: 0,
+            codeTag: ["common"],
+            orien: 0
+        }
+    };
+
+    const jsonStr = JSON.stringify(jsonConfig);
+    
+    // Create vapc box
+    const jsonBytes = new TextEncoder().encode(jsonStr);
+    const boxSize = 8 + jsonBytes.length;
+    const boxBuffer = new Uint8Array(boxSize);
+    const view = new DataView(boxBuffer.buffer);
+    
+    view.setUint32(0, boxSize);
+    view.setUint8(4, 0x76); // v
+    view.setUint8(5, 0x61); // a
+    view.setUint8(6, 0x70); // p
+    view.setUint8(7, 0x63); // c
+    
+    boxBuffer.set(jsonBytes, 8);
+    
+    // Combine buffers (Append vapc box to the end of the file)
+    const muxerBuffer = muxer.target.buffer;
+    const finalBuffer = new Uint8Array(muxerBuffer.byteLength + boxSize);
+    finalBuffer.set(new Uint8Array(muxerBuffer), 0);
+    finalBuffer.set(boxBuffer, muxerBuffer.byteLength);
+    
+    const buffer = finalBuffer.buffer;
+    const checksum = await calculateChecksum(buffer);
+    
+    // Download Files
+    const timestamp = new Date().getTime();
+    const baseName = `vap_export_${timestamp}`;
+    
+    // 1. Video (with embedded vapc)
+    const videoBlob = new Blob([buffer], { type: 'video/mp4' });
+    downloadBlob(videoBlob, `${baseName}.mp4`);
+    
+    // 3. Checksum (SHA-256)
+    const checksumBlob = new Blob([checksum], { type: 'text/plain' });
+    downloadBlob(checksumBlob, `${baseName}.sha256`);
+
+    alert("تم تصدير ملفات VAP 1.0.5 بنجاح!");
   };
 
   const exportToWebM = async (video: HTMLVideoElement, vw: number, vh: number, totalFrames: number, fps: number) => {
@@ -958,21 +1214,28 @@ export const VideoConverter: React.FC<VideoConverterProps> = ({ currentUser, onC
                         <div className={`absolute top-1 w-3 h-3 bg-slate-900 rounded-full transition-all ${removeWhite ? 'right-6' : 'right-1'}`}></div>
                     </div>
                 </div>
-                {removeWhite && (
-                    <div className="w-full pt-2 border-t border-white/10 mt-2" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex justify-between text-[9px] font-black text-slate-400 mb-1">
-                            <span>الحساسية (Tolerance)</span>
-                            <span>{whiteTolerance}</span>
-                        </div>
-                        <input 
-                            type="range" min="1" max="100" value={whiteTolerance} 
-                            onChange={(e) => setWhiteTolerance(parseInt(e.target.value))}
-                            className="w-full h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-white"
-                        />
-                    </div>
-                )}
                 </button>
             </div>
+
+            {/* Universal Tolerance Slider */}
+            {(removeWhite || removeBlack || removeGreen) && (
+                <div className="pt-4 border-t border-white/10 mt-2">
+                    <div className="flex justify-between text-[9px] font-black text-slate-400 mb-2">
+                        <span>الحساسية (Tolerance)</span>
+                        <span className="text-sky-400">{whiteTolerance}%</span>
+                    </div>
+                    <input 
+                        type="range" min="1" max="100" value={whiteTolerance} 
+                        onChange={(e) => setWhiteTolerance(parseInt(e.target.value))}
+                        className="w-full h-1.5 bg-white/10 rounded-lg appearance-none cursor-pointer accent-sky-500"
+                    />
+                    <p className="text-[8px] text-slate-500 mt-2 text-right">
+                        {removeBlack && "يتحكم في درجة السواد التي يتم إزالتها."}
+                        {removeGreen && "يتحكم في دقة عزل اللون الأخضر."}
+                        {removeWhite && "يتحكم في درجة البياض التي يتم إزالتها."}
+                    </p>
+                </div>
+            )}
 
             {/* Edge Fade Sliders */}
             <div className="space-y-6 pt-4 border-t border-white/5">
