@@ -206,10 +206,15 @@ const App: React.FC = () => {
     try {
       const parser = new SVGA.Parser();
       parser.load(fileUrl, (videoItem: any) => {
+        // Robust FPS extraction
+        let extractedFps = videoItem.FPS || videoItem.fps || 30;
+        if (typeof extractedFps === 'string') extractedFps = parseFloat(extractedFps);
+        if (!extractedFps || extractedFps <= 0) extractedFps = 30;
+
         const meta: FileMetadata = {
           name: file.name, size: file.size, type: 'SVGA',
           dimensions: { width: videoItem.videoSize?.width || 0, height: videoItem.videoSize?.height || 0 },
-          fps: videoItem.FPS || 30, frames: videoItem.frames || 0, assets: [], videoItem,
+          fps: extractedFps, frames: videoItem.frames || 0, assets: [], videoItem,
           fileUrl: fileUrl 
         };
         

@@ -1864,12 +1864,17 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
       }
 
       const sprites = (metadata.videoItem.sprites || []).filter((s: any) => !deletedKeys.has(s.imageKey));
+      
+      // Use the most accurate FPS and frame count from videoItem if available
+      const exportFps = metadata.videoItem?.FPS || metadata.fps || 30;
+      const exportFrames = metadata.videoItem?.frames || metadata.frames || 0;
+
       const manifest = {
-        version: "5.6-QUANTUM-SYNC",
+        version: "5.7-QUANTUM-SYNC",
         width: videoWidth,
         height: videoHeight,
-        fps: metadata.fps || 30,
-        frames: metadata.frames || 0,
+        fps: exportFps,
+        frames: exportFrames,
         adjustments: {
             svga: { pos: svgaPos, scale: svgaScale },
             bg: { pos: bgPos, scale: bgScale, exists: !!previewBg },
@@ -1902,9 +1907,15 @@ if (!this.JSON) { this.JSON = {}; }
 
 (function() {
     var data = ${JSON.stringify(manifest)};
-    app.beginUndoGroup("Quantum SVGA Rebuild v5.6");
-    var mainComp = app.project.items.addComp("Quantum_Animation_Suite", data.width, data.height, 1.0, data.frames / data.fps, data.fps);
+    app.beginUndoGroup("Quantum SVGA Rebuild v5.7");
+    
+    // Ensure duration is calculated precisely to match frame count
+    var compDuration = data.frames / data.fps;
+    if (compDuration <= 0) compDuration = 1/data.fps;
+    
+    var mainComp = app.project.items.addComp("Quantum_Animation_Suite", data.width, data.height, 1.0, compDuration, data.fps);
     mainComp.bgColor = [0,0,0];
+    mainComp.frameRate = data.fps; // Explicitly set frame rate again to be safe
     
     var masterNull = mainComp.layers.addNull();
     masterNull.name = "GLOBAL_SVGA_TRANSFORM";
@@ -1935,9 +1946,12 @@ if (!this.JSON) { this.JSON = {}; }
         layer.parent = masterNull;
         layer.anchorPoint.setValue([footage.width/2, footage.height/2]);
         
+        // Use comp.frameDuration for precise keyframe placement
+        var fd = mainComp.frameDuration;
+        
         for (var f = 0; f < sprite.frames.length; f++) {
             var frame = sprite.frames[f];
-            var time = f / data.fps;
+            var time = f * fd;
             
             var centerX = footage.width / 2;
             var centerY = footage.height / 2;
@@ -3117,11 +3131,16 @@ if (!this.JSON) { this.JSON = {}; }
         const parser = new SVGA.Parser();
         
         parser.load(URL.createObjectURL(new Blob([arrayBuffer])), (videoItem: any) => {
+            let extractedFps = videoItem.FPS || videoItem.fps || 30;
+            if (typeof extractedFps === 'string') extractedFps = parseFloat(extractedFps);
+            if (!extractedFps || extractedFps <= 0) extractedFps = 30;
+
             setMetadata(prev => ({
                 ...prev,
                 name: file.name,
                 videoItem: videoItem,
                 frames: videoItem.frames,
+                fps: extractedFps,
                 dimensions: { width: videoItem.videoSize.width, height: videoItem.videoSize.height }
             }));
             
@@ -5290,9 +5309,10 @@ class _MyAppState extends State<MyApp> {
                                 <div className="flex items-center bg-black/50 rounded-xl border border-white/10 px-4 py-2 group-hover:border-purple-500/30 transition-all">
                                     <input 
                                         type="number" 
+                                        step="0.01"
                                         value={metadata.fps || 30}
-                                        onChange={(e) => setMetadata({...metadata, fps: Math.min(60, Math.max(1, parseInt(e.target.value) || 30))})}
-                                        className="w-12 bg-transparent text-center text-white font-mono font-bold text-lg outline-none"
+                                        onChange={(e) => setMetadata({...metadata, fps: Math.min(120, Math.max(1, parseFloat(e.target.value) || 30))})}
+                                        className="w-16 bg-transparent text-center text-white font-mono font-bold text-lg outline-none"
                                     />
                                     <span className="text-purple-500 font-bold text-xs ml-1">FPS</span>
                                 </div>
