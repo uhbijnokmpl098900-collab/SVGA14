@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { Uploader } from './components/Uploader';
@@ -80,95 +79,125 @@ const App: React.FC = () => {
       logActivity(currentUser, 'upload', `Uploaded file: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`);
     }
 
-    if (file.name.toLowerCase().endsWith('.mp4')) {
-        try {
-           const video = document.createElement('video');
-           video.src = fileUrl;
-           video.muted = true;
-           video.playsInline = true;
-           await video.play();
-           video.pause();
-           
-           const duration = video.duration;
-           
-           if (duration > 10) {
-              alert("عذراً، يجب أن يكون الفيديو أقل من 10 ثوانٍ لتجنب انهيار المتصفح.");
-              URL.revokeObjectURL(fileUrl);
-              return;
-           }
+    const isVideo = file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4') || file.name.toLowerCase().endsWith('.webm') || file.name.toLowerCase().endsWith('.mov');
+    const isImage = file.type.startsWith('image/') || file.name.toLowerCase().endsWith('.gif') || file.name.toLowerCase().endsWith('.webp');
 
-           const vw = video.videoWidth;
-           const vh = video.videoHeight;
-           const fps = 30; 
-           const totalFrames = Math.floor(duration * fps);
-
-           const canvas = document.createElement('canvas');
-           canvas.width = vw;
-           canvas.height = vh;
-           const ctx = canvas.getContext('2d');
-           
-           const newLayerImages: Record<string, string> = {};
-           const newSprites: any[] = [];
-           
-           for (let i = 0; i < totalFrames; i++) {
-               const time = i / fps;
-               video.currentTime = time;
-               await new Promise(r => {
-                   const onSeek = () => {
-                       video.removeEventListener('seeked', onSeek);
-                       r(null);
-                   };
-                   video.addEventListener('seeked', onSeek);
-               });
+    if (isVideo || isImage) {
+        // For simple MP4/WebM, try to extract frames immediately
+        if (file.name.toLowerCase().endsWith('.mp4') || file.name.toLowerCase().endsWith('.webm')) {
+            try {
+               const video = document.createElement('video');
+               video.src = fileUrl;
+               video.muted = true;
+               video.playsInline = true;
+               await video.play();
+               video.pause();
                
-               if (ctx) {
-                   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                   const quality = 0.8;
-                   const dataUrl = canvas.toDataURL('image/png', quality);
-                   const key = `v_frame_${i}`;
-                   newLayerImages[key] = dataUrl;
+               const duration = video.duration;
+               
+               if (duration > 15) {
+                  alert("عذراً، يجب أن يكون الفيديو أقل من 15 ثانية لتجنب انهيار المتصفح.");
+                  URL.revokeObjectURL(fileUrl);
+                  return;
+               }
+
+               const vw = video.videoWidth;
+               const vh = video.videoHeight;
+               const fps = 30; 
+               const totalFrames = Math.floor(duration * fps);
+
+               const canvas = document.createElement('canvas');
+               canvas.width = vw;
+               canvas.height = vh;
+               const ctx = canvas.getContext('2d');
+               
+               const newLayerImages: Record<string, string> = {};
+               const newSprites: any[] = [];
+               
+               for (let i = 0; i < totalFrames; i++) {
+                   const time = i / fps;
+                   video.currentTime = time;
+                   await new Promise(r => {
+                       const onSeek = () => {
+                           video.removeEventListener('seeked', onSeek);
+                           r(null);
+                       };
+                       video.addEventListener('seeked', onSeek);
+                   });
                    
-                   const frames = [];
-                   for (let f = 0; f < totalFrames; f++) {
-                       frames.push({
-                           alpha: f === i ? 1.0 : 0.0,
-                           layout: { x: 0, y: 0, width: canvas.width, height: canvas.height },
-                           transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+                   if (ctx) {
+                       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                       const quality = 0.8;
+                       const dataUrl = canvas.toDataURL('image/png', quality);
+                       const key = `v_frame_${i}`;
+                       newLayerImages[key] = dataUrl;
+                       
+                       const frames = [];
+                       for (let f = 0; f < totalFrames; f++) {
+                           frames.push({
+                               alpha: f === i ? 1.0 : 0.0,
+                               layout: { x: 0, y: 0, width: canvas.width, height: canvas.height },
+                               transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+                           });
+                       }
+                       
+                       newSprites.push({
+                           imageKey: key,
+                           frames: frames,
+                           matteKey: ""
                        });
                    }
-                   
-                   newSprites.push({
-                       imageKey: key,
-                       frames: frames,
-                       matteKey: ""
-                   });
                }
-           }
 
-           const meta: FileMetadata = {
-               name: file.name, size: file.size, type: 'MP4',
-               dimensions: { width: canvas.width, height: canvas.height },
-               fps: fps, frames: totalFrames, assets: [], 
-               videoItem: {
-                   version: "2.0",
-                   videoSize: { width: canvas.width, height: canvas.height },
-                   FPS: fps,
-                   frames: totalFrames,
-                   images: newLayerImages,
-                   sprites: newSprites,
-                   audios: [] 
-               },
-               fileUrl: fileUrl 
-           };
-           
-           setFileMetadata(meta);
-           setState(AppState.PROCESSING);
+               const meta: FileMetadata = {
+                   name: file.name, size: file.size, type: 'MP4',
+                   dimensions: { width: canvas.width, height: canvas.height },
+                   fps: fps, frames: totalFrames, assets: [], 
+                   videoItem: {
+                       version: "2.0",
+                       videoSize: { width: canvas.width, height: canvas.height },
+                       FPS: fps,
+                       frames: totalFrames,
+                       images: newLayerImages,
+                       sprites: newSprites,
+                       audios: [] 
+                   },
+                   fileUrl: fileUrl 
+               };
+               
+               setFileMetadata(meta);
+               setState(AppState.PROCESSING);
 
-        } catch (e) {
-            console.error(e);
-            alert("فشل معالجة ملف MP4");
-            URL.revokeObjectURL(fileUrl);
+            } catch (e) {
+                console.error(e);
+                // Fallback to Workspace processing if simple extraction fails
+                const meta: FileMetadata = {
+                    name: file.name, size: file.size, type: 'VIDEO_COMPLEX',
+                    dimensions: { width: 0, height: 0 },
+                    fps: 30, frames: 0, assets: [], 
+                    videoItem: null,
+                    fileUrl: fileUrl 
+                };
+                setFileMetadata(meta);
+                setState(AppState.PROCESSING);
+            }
+            return;
         }
+
+        // For GIF/WebP/MOV (complex formats), pass to Workspace for FFmpeg processing
+        const meta: FileMetadata = {
+            name: file.name, 
+            size: file.size, 
+            type: isImage ? 'IMAGE_ANIM' : 'VIDEO_COMPLEX',
+            dimensions: { width: 0, height: 0 },
+            fps: 30, 
+            frames: 0, 
+            assets: [], 
+            videoItem: null,
+            fileUrl: fileUrl 
+        };
+        setFileMetadata(meta);
+        setState(AppState.PROCESSING);
         return;
     }
 

@@ -1,9 +1,11 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { FileMetadata, MaterialAsset, AppSettings, UserRecord, PresetBackground } from '../types';
-import { Layers, Download, Copy } from 'lucide-react';
+import { Layers, Download, Copy, Trash2 } from 'lucide-react';
 import { logActivity } from '../utils/logger';
 import * as Mp4Muxer from 'mp4-muxer';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { fetchFile, toBlobURL } from '@ffmpeg/util';
 
 declare var SVGA: any;
 declare var JSZip: any;
@@ -73,6 +75,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
   const [replacingAssetKey, setReplacingAssetKey] = useState<string | null>(null);
   const [layerImages, setLayerImages] = useState<Record<string, string>>({});
   const [assetColors, setAssetColors] = useState<Record<string, string>>({});
+  const [assetColorModes, setAssetColorModes] = useState<Record<string, 'tint' | 'fill'>>({});
   const [searchQuery, setSearchQuery] = useState('');
   const [assetsLoading, setAssetsLoading] = useState(true);
   const [scale, setScale] = useState(1);
@@ -108,6 +111,40 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
   const [fadeModalTarget, setFadeModalTarget] = useState<string | null>(null);
   const [fadeModalValues, setFadeModalValues] = useState({ top: 0, bottom: 0, left: 0, right: 0 });
   const [recordingDuration, setRecordingDuration] = useState<number>(10);
+  const ffmpegRef = useRef(new FFmpeg());
+  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+
+  const loadFfmpeg = async () => {
+    if (ffmpegLoaded) return;
+    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+    const ffmpeg = ffmpegRef.current;
+    ffmpeg.on('log', ({ message }) => {
+        console.log(message);
+    });
+    // Load ffmpeg
+    await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+    });
+    setFfmpegLoaded(true);
+  };
+
+  const handleRemoveAudio = () => {
+    if (confirm('هل أنت متأكد من حذف الصوت؟\nAre you sure you want to remove the audio?')) {
+        setAudioUrl(null);
+        setOriginalAudioUrl(null);
+        setAudioFile(null);
+        
+        // Update metadata to remove audio references
+        if (metadata.videoItem) {
+             const newMetadata = { ...metadata };
+             if (newMetadata.videoItem.audios) {
+                 newMetadata.videoItem.audios = [];
+             }
+             setMetadata(newMetadata);
+        }
+    }
+  };
 
   useEffect(() => {
     if (metadata.frames && metadata.fps) {
@@ -138,56 +175,63 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
     };
   }, []);
 
-  const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-
-      // Log Upload Activity
-      if (currentUser) {
-        logActivity(currentUser, 'upload', `Uploaded video: ${file.name}`);
-      }
-
-      // Use the toggle state instead of confirm dialog if possible, or fallback to confirm if not set
-      let isVap = isVapMode;
-      if (!isVap) {
-          // Optional: still ask if not toggled, or just trust the toggle?
-          // Let's trust the toggle to avoid annoyance, but maybe the user forgot.
-          // For now, let's stick to the toggle being the source of truth for "VAP Mode".
-          // But if the user uploads a video without toggling, they get standard video.
-          // Let's keep the confirm as a fallback if the filename implies VAP? No, that's magic.
-          // Let's just use the confirm if the toggle is OFF, to be safe, or just rely on the toggle.
-          // The user complained about "finding it in vap format", so maybe they want explicit control.
-          // Let's use the confirm ONLY if the toggle is OFF.
-          isVap = confirm("هل هذا الفيديو يحتوي على قناة شفافية (VAP/Alpha)؟\nIs this a transparent video (VAP)?");
-      }
-
-      let vapLayout = 'rgb_left';
-      if (isVap) {
-          const layout = prompt("اختر تخطيط الفيديو:\n1. يسار: RGB | يمين: Alpha (افتراضي)\n2. يسار: Alpha | يمين: RGB\n3. أعلى: RGB | أسفل: Alpha\n4. أعلى: Alpha | أسفل: RGB", "1");
-          if (layout === "2") vapLayout = 'alpha_left';
-          if (layout === "3") vapLayout = 'rgb_top';
-          if (layout === "4") vapLayout = 'alpha_top';
-      }
-
-      const targetFps = parseInt(prompt("أدخل عدد الإطارات في الثانية (FPS):", "30") || "30");
-      const targetQuality = parseFloat(prompt("أدخل جودة الصور (0.1 - 1.0):", "0.8") || "0.8");
-
+  const processImportedFile = useCallback(async (file: File, isVap: boolean, vapLayout: string, targetFps: number, targetQuality: number) => {
       setIsProcessingVideo(true);
-      setExportPhase('جاري معالجة الفيديو واستخراج الإطارات...');
+      setExportPhase('جاري معالجة الملف...');
       setIsExporting(true);
 
       try {
+          let videoSrc = '';
+          
+          if (file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4') || file.name.toLowerCase().endsWith('.webm') || file.name.toLowerCase().endsWith('.mov')) {
+              videoSrc = URL.createObjectURL(file);
+          } else if (file.type.startsWith('image/') || file.name.toLowerCase().endsWith('.gif') || file.name.toLowerCase().endsWith('.webp')) {
+              setExportPhase('جاري تحويل الملف (FFmpeg)...');
+              const ffmpeg = ffmpegRef.current;
+              if (!ffmpegLoaded) {
+                  await loadFfmpeg();
+              }
+              await ffmpeg.writeFile('input', await fetchFile(file));
+              // Convert to WebM to preserve transparency (Alpha)
+              await ffmpeg.exec(['-i', 'input', '-pix_fmt', 'yuva420p', 'output.webm']);
+              const data = await ffmpeg.readFile('output.webm');
+              const blob = new Blob([data], { type: 'video/webm' });
+              videoSrc = URL.createObjectURL(blob);
+          } else {
+              throw new Error('Unsupported file format');
+          }
+
           const video = document.createElement('video');
-          video.src = URL.createObjectURL(file);
+          video.src = videoSrc;
           video.muted = true;
           video.playsInline = true;
+          video.crossOrigin = "anonymous"; // Add crossOrigin for safety
+          
+          await new Promise((resolve, reject) => {
+              video.onloadeddata = () => resolve(null);
+              video.onerror = (e) => reject(new Error(`Video load error: ${video.error?.message || 'Unknown error'}`));
+              // Timeout fallback
+              setTimeout(() => reject(new Error("Video load timeout")), 10000);
+          });
+
           await video.play();
           video.pause();
           
-          const duration = video.duration;
+          let duration = video.duration;
+          if (!Number.isFinite(duration) || duration <= 0) {
+              console.warn("Invalid duration detected, defaulting to 1s");
+              duration = 1; // Default to 1 second if duration is invalid (e.g. static image converted to video)
+          }
+
           const vw = video.videoWidth;
           const vh = video.videoHeight;
-          const totalFrames = Math.floor(duration * targetFps);
+          
+          if (vw === 0 || vh === 0) {
+              throw new Error("Invalid video dimensions (0x0)");
+          }
+
+          let totalFrames = Math.floor(duration * targetFps);
+          if (totalFrames < 1) totalFrames = 1; // Ensure at least 1 frame
 
           setAudioUrl(video.src);
           setOriginalAudioUrl(video.src);
@@ -273,29 +317,13 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
                       }
                       ctx.putImageData(finalData, 0, 0);
                       
-                      // Use Blob URL to save memory
-                      await new Promise<void>(resolve => {
-                          canvas.toBlob(blob => {
-                              if (blob) {
-                                  const url = URL.createObjectURL(blob);
-                                  newLayerImages[key] = url;
-                              }
-                              resolve();
-                          }, 'image/png');
-                      });
+                      // Use Data URL (Base64) for compatibility
+                      newLayerImages[key] = canvas.toDataURL('image/png');
 
                   } else {
                       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                      // Use Blob URL for standard video too
-                      await new Promise<void>(resolve => {
-                          canvas.toBlob(blob => {
-                              if (blob) {
-                                  const url = URL.createObjectURL(blob);
-                                  newLayerImages[key] = url;
-                              }
-                              resolve();
-                          }, 'image/jpeg', targetQuality);
-                      });
+                      // Use Data URL (Base64) for compatibility
+                      newLayerImages[key] = canvas.toDataURL('image/webp', targetQuality);
                   }
                   
                   const frames = [];
@@ -322,7 +350,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
           setCurrentFrame(0);
           setMetadata({
               ...metadata,
-              name: file.name.replace('.mp4', ''),
+              name: file.name.replace(/\.[^/.]+$/, ""),
               frames: totalFrames,
               fps: targetFps,
               dimensions: { width: canvas.width, height: canvas.height },
@@ -348,12 +376,96 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
           
       } catch (e) {
           console.error(e);
-          alert("فشل معالجة الفيديو");
+          alert("فشل معالجة الفيديو: " + (e as any).message);
       } finally {
           setIsProcessingVideo(false);
           setIsExporting(false);
+          setExportPhase('');
           setProgress(0);
       }
+  }, [ffmpegLoaded, layerImages, metadata]);
+
+  // Handle initial import from App.tsx
+  useEffect(() => {
+      if ((metadata.type === 'VIDEO_COMPLEX' || metadata.type === 'IMAGE_ANIM') && !metadata.videoItem && !isProcessingVideo) {
+          const initImport = async () => {
+              if (!metadata.fileUrl) return;
+              
+              // Show loading immediately
+              setIsExporting(true);
+              setExportPhase('جاري تحضير الملف...');
+
+              try {
+                  const response = await fetch(metadata.fileUrl);
+                  const blob = await response.blob();
+                  const file = new File([blob], metadata.name, { type: metadata.type === 'IMAGE_ANIM' ? 'image/gif' : 'video/mp4' });
+                  
+                  let isVap = false;
+                  let vapLayout = 'rgb_left';
+                  let targetFps = 30;
+                  let targetQuality = 0.8;
+
+                  // Only ask for settings if it's a complex video (likely VAP)
+                  // For GIFs/WebP (IMAGE_ANIM), use defaults to ensure smooth UX
+                  if (metadata.type === 'VIDEO_COMPLEX') {
+                      // Small delay to allow UI to render loading state before blocking alert
+                      await new Promise(r => setTimeout(r, 100));
+                      
+                      isVap = confirm("هل هذا الفيديو يحتوي على قناة شفافية (VAP/Alpha)؟\nIs this a transparent video (VAP)?");
+                      
+                      if (isVap) {
+                          const layout = prompt("اختر تخطيط الفيديو:\n1. يسار: RGB | يمين: Alpha (افتراضي)\n2. يسار: Alpha | يمين: RGB\n3. أعلى: RGB | أسفل: Alpha\n4. أعلى: Alpha | أسفل: RGB", "1");
+                          if (layout === "2") vapLayout = 'alpha_left';
+                          if (layout === "3") vapLayout = 'rgb_top';
+                          if (layout === "4") vapLayout = 'alpha_top';
+                      }
+
+                      const fpsInput = prompt("أدخل عدد الإطارات في الثانية (FPS):", "30");
+                      targetFps = parseInt(fpsInput || "30");
+                      
+                      const qualityInput = prompt("أدخل جودة الصور (0.1 - 1.0):", "0.8");
+                      targetQuality = parseFloat(qualityInput || "0.8");
+                  }
+
+                  await processImportedFile(file, isVap, vapLayout, targetFps, targetQuality);
+              } catch (e) {
+                  console.error("Failed to fetch initial file", e);
+                  alert("فشل في معالجة الملف: " + (e as any).message);
+                  setIsExporting(false);
+                  onCancel(); // Go back to uploader
+              }
+          };
+          initImport();
+      }
+  }, [metadata, isProcessingVideo, processImportedFile, onCancel]);
+
+  const handleVideoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      // Log Upload Activity
+      if (currentUser) {
+        logActivity(currentUser, 'upload', `Uploaded file: ${file.name}`);
+      }
+
+      // Use the toggle state instead of confirm dialog if possible, or fallback to confirm if not set
+      let isVap = isVapMode;
+      if (!isVap) {
+          isVap = confirm("هل هذا الفيديو يحتوي على قناة شفافية (VAP/Alpha)؟\nIs this a transparent video (VAP)?");
+      }
+
+      let vapLayout = 'rgb_left';
+      if (isVap) {
+          const layout = prompt("اختر تخطيط الفيديو:\n1. يسار: RGB | يمين: Alpha (افتراضي)\n2. يسار: Alpha | يمين: RGB\n3. أعلى: RGB | أسفل: Alpha\n4. أعلى: Alpha | أسفل: RGB", "1");
+          if (layout === "2") vapLayout = 'alpha_left';
+          if (layout === "3") vapLayout = 'rgb_top';
+          if (layout === "4") vapLayout = 'alpha_top';
+      }
+
+      const targetFps = parseInt(prompt("أدخل عدد الإطارات في الثانية (FPS):", "30") || "30");
+      const targetQuality = parseFloat(prompt("أدخل جودة الصور (0.1 - 1.0):", "0.8") || "0.8");
+
+      await processImportedFile(file, isVap, vapLayout, targetFps, targetQuality);
   };
 
   useEffect(() => {
@@ -547,7 +659,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
     });
   }, []);
 
-  const tintImage = useCallback(async (base64: string, color: string): Promise<string> => {
+  const tintImage = useCallback(async (base64: string, color: string, mode: 'tint' | 'fill' = 'tint'): Promise<string> => {
     if (!color || color === '#ffffff') return base64;
     return new Promise((resolve) => {
       const img = new Image();
@@ -557,11 +669,22 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
         const ctx = canvas.getContext('2d');
         if (ctx) {
           ctx.drawImage(img, 0, 0);
-          ctx.globalCompositeOperation = 'source-atop';
-          ctx.globalAlpha = 0.5;
-          ctx.fillStyle = color;
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.globalAlpha = 1.0;
+          
+          if (mode === 'fill') {
+             ctx.globalCompositeOperation = 'source-in';
+             ctx.fillStyle = color;
+             ctx.fillRect(0, 0, canvas.width, canvas.height);
+          } else {
+             // Improved Tint: Multiply to preserve details/shading while applying color
+             ctx.globalCompositeOperation = 'multiply';
+             ctx.fillStyle = color;
+             ctx.fillRect(0, 0, canvas.width, canvas.height);
+             
+             // Restore original alpha channel to ensure clean edges
+             ctx.globalCompositeOperation = 'destination-in';
+             ctx.drawImage(img, 0, 0);
+          }
+          
           resolve(canvas.toDataURL('image/png'));
         } else resolve(base64);
       };
@@ -573,11 +696,12 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
     const base64 = layerImages[key];
     if (!base64) return TRANSPARENT_PIXEL;
     const color = assetColors[key];
+    const mode = assetColorModes[key] || 'tint';
     if (color && color !== '#ffffff') {
-      return await tintImage(base64, color);
+      return await tintImage(base64, color, mode);
     }
     return base64;
-  }, [layerImages, assetColors, tintImage]);
+  }, [layerImages, assetColors, assetColorModes, tintImage]);
 
   useEffect(() => {
     if (!metadata.videoItem) return;
@@ -842,7 +966,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
         const currentSprites = [...(metadata.videoItem.sprites || [])];
         
         const sourceImg = new Image();
-        sourceImg.src = layerImages[targetKey];
+        const processedUrl = await getProcessedAsset(targetKey);
+        sourceImg.src = processedUrl;
         await new Promise(r => sourceImg.onload = r);
 
         const generatedSprites: any[] = [];
@@ -1010,13 +1135,26 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
   const handleColorChange = async (key: string, color: string) => {
     setAssetColors(p => ({ ...p, [key]: color }));
     if (svgaInstance && !deletedKeys.has(key)) {
-      const finalImage = await tintImage(layerImages[key], color);
+      const mode = assetColorModes[key] || 'tint';
+      const finalImage = await tintImage(layerImages[key], color, mode);
       svgaInstance.setImage(finalImage, key);
     }
   };
 
-  const handleDownloadLayer = (key: string) => {
-    const base64 = layerImages[key];
+  const handleToggleColorMode = async (key: string) => {
+    const currentMode = assetColorModes[key] || 'tint';
+    const newMode = currentMode === 'tint' ? 'fill' : 'tint';
+    setAssetColorModes(p => ({ ...p, [key]: newMode }));
+    
+    const color = assetColors[key];
+    if (color && color !== '#ffffff' && svgaInstance && !deletedKeys.has(key)) {
+        const finalImage = await tintImage(layerImages[key], color, newMode);
+        svgaInstance.setImage(finalImage, key);
+    }
+  };
+
+  const handleDownloadLayer = async (key: string) => {
+    const base64 = await getProcessedAsset(key);
     if (base64) {
       const link = document.createElement("a");
       link.href = base64;
@@ -1681,7 +1819,6 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
   const handleExportAEProject = async () => {
     if (!svgaInstance) return;
 
-
     setIsExporting(true);
     setExportPhase('تحليل مصفوفة الطبقات Quantum v5.6...');
     try {
@@ -1703,6 +1840,29 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
       if (previewBg) zip.file(`background.png`, previewBg.split(',')[1], { base64: true });
       if (watermark) zip.file(`watermark.png`, watermark.split(',')[1], { base64: true });
 
+      // Handle Audio Export
+      let audioFilename = '';
+      let hasAudio = false;
+      if (audioFile) {
+          const audioBuffer = await audioFile.arrayBuffer();
+          audioFilename = `audio.${audioFile.name.split('.').pop() || 'mp3'}`;
+          assetsFolder.file(audioFilename, audioBuffer);
+          hasAudio = true;
+      } else if (audioUrl) {
+          try {
+              const response = await fetch(audioUrl);
+              const blob = await response.blob();
+              const audioBuffer = await blob.arrayBuffer();
+              // Try to guess extension from MIME type or default to mp3
+              const ext = blob.type.split('/')[1] || 'mp3';
+              audioFilename = `audio.${ext}`;
+              assetsFolder.file(audioFilename, audioBuffer);
+              hasAudio = true;
+          } catch (e) {
+              console.warn("Failed to fetch audio for export", e);
+          }
+      }
+
       const sprites = (metadata.videoItem.sprites || []).filter((s: any) => !deletedKeys.has(s.imageKey));
       const manifest = {
         version: "5.6-QUANTUM-SYNC",
@@ -1713,7 +1873,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
         adjustments: {
             svga: { pos: svgaPos, scale: svgaScale },
             bg: { pos: bgPos, scale: bgScale, exists: !!previewBg },
-            wm: { pos: wmPos, scale: wmScale, exists: !!watermark }
+            wm: { pos: wmPos, scale: wmScale, exists: !!watermark },
+            audio: { exists: hasAudio, filename: audioFilename }
         },
         sprites: sprites.map((s: any) => ({
           imageKey: s.imageKey,
@@ -1744,58 +1905,101 @@ if (!this.JSON) { this.JSON = {}; }
     app.beginUndoGroup("Quantum SVGA Rebuild v5.6");
     var mainComp = app.project.items.addComp("Quantum_Animation_Suite", data.width, data.height, 1.0, data.frames / data.fps, data.fps);
     mainComp.bgColor = [0,0,0];
+    
     var masterNull = mainComp.layers.addNull();
     masterNull.name = "GLOBAL_SVGA_TRANSFORM";
     masterNull.position.setValue([data.width/2 + data.adjustments.svga.pos.x, data.height/2 + data.adjustments.svga.pos.y]);
     masterNull.scale.setValue([data.adjustments.svga.scale * 100, data.adjustments.svga.scale * 100]);
-    var assetsFolder = Folder.selectDialog("اختر مجلد assets المستخرج");
+
+    var assetsFolder = Folder.selectDialog("Select the 'assets' folder extracted from the ZIP");
     if (!assetsFolder) { app.endUndoGroup(); return; }
+
+    // Import Audio
+    if (data.adjustments.audio.exists) {
+        var audioFile = File(assetsFolder.fsName + "/" + data.adjustments.audio.filename);
+        if (audioFile.exists) {
+            var audioItem = app.project.importFile(new ImportOptions(audioFile));
+            var audioLayer = mainComp.layers.add(audioItem);
+            audioLayer.name = "Audio_Track";
+        }
+    }
+
     for (var i = 0; i < data.sprites.length; i++) {
         var sprite = data.sprites[i];
         var imgFile = File(assetsFolder.fsName + "/" + sprite.imageKey + ".png");
         if (!imgFile.exists) continue;
+        
         var footage = app.project.importFile(new ImportOptions(imgFile));
         var layer = mainComp.layers.add(footage);
         layer.name = "Layer_" + i + "_" + sprite.imageKey;
         layer.parent = masterNull;
         layer.anchorPoint.setValue([footage.width/2, footage.height/2]);
+        
         for (var f = 0; f < sprite.frames.length; f++) {
             var frame = sprite.frames[f];
             var time = f / data.fps;
+            
             var centerX = footage.width / 2;
             var centerY = footage.height / 2;
             var finalX, finalY;
+            
             var opKey = layer.opacity.addKey(time);
             layer.opacity.setValueAtKey(opKey, frame.a * 100);
             layer.opacity.setInterpolationTypeAtKey(opKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+            
             if (frame.t) {
                 var t = frame.t;
                 finalX = t.a * centerX + t.c * centerY + t.tx + frame.l.x;
                 finalY = t.b * centerX + t.d * centerY + t.ty + frame.l.y;
-                var sx = Math.sqrt(t.a * t.a + t.b * t.b) * 100;
-                var sy = Math.sqrt(t.c * t.c + t.d * t.d) * 100;
+                
+                var sx = Math.sqrt(t.a * t.a + t.b * t.b);
+                var sy = Math.sqrt(t.c * t.c + t.d * t.d);
+                
+                // Calculate determinant to detect flips/mirrors
+                var det = t.a * t.d - t.b * t.c;
+                if (det < 0) {
+                    sy = -sy;
+                }
+
+                sx *= 100;
+                sy *= 100;
                 var rot = Math.atan2(t.b, t.a) * 180 / Math.PI;
+                
                 var scaleKey = layer.scale.addKey(time);
                 layer.scale.setValueAtKey(scaleKey, [sx, sy]);
                 layer.scale.setInterpolationTypeAtKey(scaleKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+                
                 var rotKey = layer.rotation.addKey(time);
                 layer.rotation.setValueAtKey(rotKey, rot);
                 layer.rotation.setInterpolationTypeAtKey(rotKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
             } else {
                 finalX = frame.l.x + centerX;
                 finalY = frame.l.y + centerY;
+                
+                var scaleX = 100;
+                var scaleY = 100;
+                // Fix for Dimensions: Use layout size if transform is missing
+                if (frame.l && frame.l.width && frame.l.height && footage.width > 0 && footage.height > 0) {
+                     scaleX = (frame.l.width / footage.width) * 100;
+                     scaleY = (frame.l.height / footage.height) * 100;
+                }
+
                 var scaleKey = layer.scale.addKey(time);
-                layer.scale.setValueAtKey(scaleKey, [100, 100]);
+                layer.scale.setValueAtKey(scaleKey, [scaleX, scaleY]);
                 layer.scale.setInterpolationTypeAtKey(scaleKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+                
                 var rotKey = layer.rotation.addKey(time);
                 layer.rotation.setValueAtKey(rotKey, 0);
                 layer.rotation.setInterpolationTypeAtKey(rotKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
             }
+            
             var posKey = layer.position.addKey(time);
-            layer.position.setValueAtKey(posKey, [finalX, finalY]);
+            // Offset by half width/height because parent (masterNull) is at center
+            layer.position.setValueAtKey(posKey, [finalX - data.width/2, finalY - data.height/2]);
             layer.position.setInterpolationTypeAtKey(posKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
         }
     }
+
     var projectFolder = assetsFolder.parent;
     if (data.adjustments.bg.exists) {
         var bgFile = File(projectFolder.fsName + "/background.png");
@@ -1807,6 +2011,7 @@ if (!this.JSON) { this.JSON = {}; }
             bgL.position.setValue([data.width * (data.adjustments.bg.pos.x/100), data.height * (data.adjustments.bg.pos.y/100)]);
         }
     }
+
     if (data.adjustments.wm.exists) {
         var wmFile = File(projectFolder.fsName + "/watermark.png");
         if (wmFile.exists) {
@@ -1818,16 +2023,52 @@ if (!this.JSON) { this.JSON = {}; }
             wmL.scale.setValue([ws, ws]);
         }
     }
+
     app.endUndoGroup();
-    alert("✅ اكتمل البناء الكمي v5.6!");
+    alert("✅ Animation Rebuild Complete!");
 })();
       `;
 
-      zip.file("build_animation.jsx", jsxContent);
+      const readmeContent = `SVGA to AEP Script Usage Guide (v5.7)
+================================
+
+📁 Files Included
+-----------------
+- ${metadata.name.replace('.svga','')}.jsx - After Effects script file
+- assets/ - Exported image and audio files
+- README.txt - This file
+
+🚀 Quick Start
+--------------
+1. Open Adobe After Effects
+2. Go to File > Scripts > Run Script File
+3. Select ${metadata.name.replace('.svga','')}.jsx script file
+4. Wait for processing (progress bar will show)
+5. Composition viewer will open automatically
+
+✅ Features (v5.7 Updates)
+--------------------------
+- Auto create AEP project
+- Import all assets (images, audio)
+- Rebuild animation keyframes (Position, Scale, Rotation, Opacity)
+- FIXED: Mirrored/Flipped layers now render correctly (Negative Scale Y)
+- FIXED: Layers with layout scaling now maintain correct dimensions
+- Background & Watermark support
+
+⚠️ Requirements
+---------------
+- Adobe After Effects CC 2018 or newer
+- Allow Scripts to Write Files and Access Network (Edit > Preferences > Scripting & Expressions)
+`;
+
+
+      zip.file(`${metadata.name.replace('.svga','')}.jsx`, jsxContent);
+      zip.file("README.txt", readmeContent);
+      
       const blob = await zip.generateAsync({ type: "blob" });
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
-      link.download = `${metadata.name.replace('.svga','')}_PrecisionAE_v5.6.zip`;
+      link.download = `${metadata.name.replace('.svga','')}_AfterEffects_Project.zip`;
       link.click();
       setProgress(100);
     } catch (e) { console.error(e); } finally { setTimeout(() => setIsExporting(false), 800); }
@@ -3077,16 +3318,10 @@ if (!this.JSON) { this.JSON = {}; }
         (metadata.videoItem.sprites || []).forEach((s: any) => uniqueKeys.add(s.imageKey));
         
         for (const key of uniqueKeys) {
-            const src = layerImages[key] || (metadata.videoItem.images && metadata.videoItem.images[key]);
-            if (src) {
-                let url = src;
-                if (src instanceof Uint8Array) {
-                     let binary = '';
-                     const len = src.byteLength;
-                     for (let k = 0; k < len; k++) binary += String.fromCharCode(src[k]);
-                     url = `data:image/png;base64,${btoa(binary)}`;
-                }
-                images[key] = await loadImage(url);
+            // Use getProcessedAsset to ensure tints/fills are applied
+            const processedUrl = await getProcessedAsset(key);
+            if (processedUrl) {
+                images[key] = await loadImage(processedUrl);
             }
         }
 
@@ -3982,6 +4217,22 @@ if (!this.JSON) { this.JSON = {}; }
     }
   };
 
+  if (!metadata.videoItem && isExporting) {
+      return (
+        <div className="fixed inset-0 z-[500] bg-slate-950/80 backdrop-blur-3xl flex items-center justify-center p-6">
+           <div className="max-w-md w-full bg-slate-900 border border-white/10 p-10 rounded-[3rem] shadow-3xl text-center space-y-6">
+              <div className="w-24 h-24 bg-sky-500/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-sky-500/20">
+                 <div className="w-12 h-12 border-4 border-sky-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+              <h3 className="text-white font-black text-xl uppercase tracking-tighter">{exportPhase}</h3>
+              <div className="w-full h-3 bg-white/5 rounded-full overflow-hidden p-0.5 border border-white/5">
+                 <div className="h-full bg-sky-500 rounded-full transition-all duration-300" style={{ width: `${progress}%` }}></div>
+              </div>
+           </div>
+        </div>
+      );
+  }
+
   return (
     <div className="flex flex-col gap-6 sm:gap-8 pb-32 animate-in fade-in slide-in-from-bottom-8 duration-1000 font-arabic select-none text-right" dir="rtl">
       <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleReplaceImage} />
@@ -3990,7 +4241,7 @@ if (!this.JSON) { this.JSON = {}; }
       <input type="file" ref={watermarkInputRef} className="hidden" accept="image/*" onChange={handleWatermarkUpload} />
       <input type="file" ref={layerInputRef} className="hidden" accept="image/*" onChange={handleAddLayer} />
       <input type="file" ref={audioInputRef} className="hidden" accept="audio/*" onChange={handleAudioUpload} />
-      <input type="file" ref={videoInputRef} className="hidden" accept="video/mp4" onChange={handleVideoUpload} />
+      <input type="file" ref={videoInputRef} className="hidden" accept="video/*,image/gif,image/webp" onChange={handleVideoUpload} />
       <audio ref={audioRef} src={audioUrl || undefined} loop />
 
       {isExporting && (
@@ -4234,11 +4485,18 @@ if (!this.JSON) { this.JSON = {}; }
                                       {!deletedKeys.has(key) && (
                                           <div className="flex flex-col gap-2 w-full">
                                             <div className="flex gap-2 justify-center">
-                                                <button onClick={() => { setReplacingAssetKey(key); fileInputRef.current?.click(); }} className="w-8 h-8 bg-sky-500 text-white rounded-lg flex items-center justify-center">✏️</button>
-                                                <button onClick={() => handleDownloadLayer(key)} className="w-8 h-8 bg-emerald-500 text-white rounded-lg flex items-center justify-center">⬇️</button>
-                                                <div className="relative w-8 h-8 bg-white/10 rounded-lg overflow-hidden border border-white/20">
+                                                <button onClick={() => { setReplacingAssetKey(key); fileInputRef.current?.click(); }} className="w-8 h-8 bg-sky-500 text-white rounded-lg flex items-center justify-center" title="استبدال الصورة">✏️</button>
+                                                <button onClick={() => handleDownloadLayer(key)} className="w-8 h-8 bg-emerald-500 text-white rounded-lg flex items-center justify-center" title="تحميل الصورة">⬇️</button>
+                                                <div className={`relative w-8 h-8 rounded-lg overflow-hidden border-2 ${assetColorModes[key] === 'fill' ? 'border-pink-500' : 'border-white/20'}`} title={assetColorModes[key] === 'fill' ? "تلوين كامل (Fill)" : "تلوين دمج (Multiply - يحافظ على التفاصيل)"}>
                                                   <input type="color" value={assetColors[key] || "#ffffff"} onChange={(e) => handleColorChange(key, e.target.value)} className="absolute inset-[-50%] w-[200%] h-[200%] cursor-pointer bg-transparent border-none" />
                                                 </div>
+                                                <button 
+                                                    onClick={() => handleToggleColorMode(key)} 
+                                                    className={`w-8 h-8 rounded-lg flex items-center justify-center text-[10px] border transition-all ${assetColorModes[key] === 'fill' ? 'bg-pink-500/20 border-pink-500 text-pink-400' : 'bg-blue-500/20 border-blue-500 text-blue-400'}`}
+                                                    title={assetColorModes[key] === 'fill' ? "وضع التعبئة (تغيير كامل)" : "وضع التلوين (Multiply - يحافظ على التفاصيل)"}
+                                                >
+                                                    {assetColorModes[key] === 'fill' ? '🎨' : '💧'}
+                                                </button>
                                             </div>
                                             <div className="flex gap-1 justify-between w-full">
                                                 <button onClick={(e) => { e.stopPropagation(); handleMoveSprite(key, 'down'); }} className="flex-1 py-1.5 bg-white/5 rounded-lg text-[8px] text-slate-400 hover:text-white hover:bg-white/10">⬇️ خلف</button>
@@ -4537,14 +4795,21 @@ if (!this.JSON) { this.JSON = {}; }
                     <div className="grid grid-cols-2 gap-4">
                        <button onClick={() => bgInputRef.current?.click()} className="py-4 bg-white/5 border border-white/5 rounded-2xl text-[10px] text-white font-black uppercase">رفع خلفية</button>
                        <button onClick={() => watermarkInputRef.current?.click()} className="py-4 bg-white/5 border border-white/5 rounded-2xl text-[10px] text-white font-black uppercase">رفع علامة</button>
-                       <button onClick={() => audioInputRef.current?.click()} className={`py-4 border border-white/5 rounded-2xl text-[10px] font-black uppercase ${audioUrl ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-white/5 text-white'}`}>{audioUrl ? 'تغيير الصوت' : 'رفع صوت'}</button>
+                       <div className="flex gap-2 col-span-1">
+                           <button onClick={() => audioInputRef.current?.click()} className={`flex-1 py-4 border border-white/5 rounded-2xl text-[10px] font-black uppercase ${audioUrl ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' : 'bg-white/5 text-white'}`}>{audioUrl ? 'تغيير الصوت' : 'رفع صوت'}</button>
+                           {audioUrl && (
+                               <button onClick={handleRemoveAudio} className="w-12 flex items-center justify-center bg-red-500/20 border border-red-500/30 rounded-2xl text-red-400 hover:bg-red-500/30 transition-all" title="إزالة الصوت">
+                                   <Trash2 className="w-4 h-4" />
+                               </button>
+                           )}
+                       </div>
                        <div className="flex gap-2">
                            <button onClick={() => { setSelectedFormat('VAP (MP4)'); handleMainExport(); }} className="flex-1 py-4 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-2xl text-[10px] font-black uppercase hover:bg-indigo-500/30 transition-all">تصدير VAP (flutter_vap_plus)</button>
                            <button onClick={() => setShowVapHelp(true)} className="w-12 flex items-center justify-center bg-white/5 border border-white/5 rounded-2xl text-white hover:bg-white/10 transition-all">
                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                            </button>
                        </div>
-                       <button onClick={() => videoInputRef.current?.click()} className="py-4 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-2xl text-[10px] font-black uppercase">تحويل MP4</button>
+                       <button onClick={() => videoInputRef.current?.click()} className="py-4 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-2xl text-[10px] font-black uppercase">استيراد ملف (فيديو/GIF/WebP)</button>
                        <button onClick={() => setShowRecordingModal(true)} className="col-span-2 py-4 bg-red-500/20 text-red-400 border border-red-500/30 rounded-2xl text-[10px] font-black uppercase flex items-center justify-center gap-2">
                           <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
                           تسجيل فيديو (Screen Record)
