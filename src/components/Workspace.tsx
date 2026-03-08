@@ -116,17 +116,33 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
 
   const loadFfmpeg = async () => {
     if (ffmpegLoaded) return;
+    
+    if (!window.crossOriginIsolated) {
+        console.warn("SharedArrayBuffer is not available. FFmpeg might fail or be slow.");
+    }
+
     const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
     const ffmpeg = ffmpegRef.current;
     ffmpeg.on('log', ({ message }) => {
         console.log(message);
     });
-    // Load ffmpeg
-    await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-    });
-    setFfmpegLoaded(true);
+    
+    try {
+        const loadPromise = ffmpeg.load({
+            coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+            wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        });
+
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error("FFmpeg load timeout (20s)")), 20000)
+        );
+
+        await Promise.race([loadPromise, timeoutPromise]);
+        setFfmpegLoaded(true);
+    } catch (e) {
+        console.error("FFmpeg load error:", e);
+        throw e;
+    }
   };
 
   const handleRemoveAudio = () => {
@@ -186,17 +202,8 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
           if (file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4') || file.name.toLowerCase().endsWith('.webm') || file.name.toLowerCase().endsWith('.mov')) {
               videoSrc = URL.createObjectURL(file);
           } else if (file.type.startsWith('image/') || file.name.toLowerCase().endsWith('.gif') || file.name.toLowerCase().endsWith('.webp')) {
-              setExportPhase('جاري تحويل الملف (FFmpeg)...');
-              const ffmpeg = ffmpegRef.current;
-              if (!ffmpegLoaded) {
-                  await loadFfmpeg();
-              }
-              await ffmpeg.writeFile('input', await fetchFile(file));
-              // Convert to WebM to preserve transparency (Alpha)
-              await ffmpeg.exec(['-i', 'input', '-pix_fmt', 'yuva420p', 'output.webm']);
-              const data = await ffmpeg.readFile('output.webm');
-              const blob = new Blob([data], { type: 'video/webm' });
-              videoSrc = URL.createObjectURL(blob);
+              // Reverted to simple object URL as per user request to remove FFmpeg conversion system
+              videoSrc = URL.createObjectURL(file);
           } else {
               throw new Error('Unsupported file format');
           }
@@ -3165,8 +3172,30 @@ if (!this.JSON) { this.JSON = {}; }
       return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
   };
 
-  const handleVAP105Export = async () => {
+  const handleVAP105Export = async (fromMain = false) => {
+    if (!currentUser) {
+        onLoginRequired();
+        return;
+    }
+
+    const hasActiveSubscription = currentUser.subscriptionType && currentUser.subscriptionType !== 'none';
+    const hasSpecificPermission = currentUser.allowedExportFormat && 
+        (Array.isArray(currentUser.allowedExportFormat) 
+            ? currentUser.allowedExportFormat.includes('VAP 1.0.5') 
+            : currentUser.allowedExportFormat === 'VAP 1.0.5');
+
+    const isAllowed = hasActiveSubscription || hasSpecificPermission;
+
+    if (!isAllowed) {
+        onSubscriptionRequired();
+        return;
+    }
+
     if (!metadata.videoItem) return;
+
+    if (!fromMain) {
+         logActivity(currentUser, 'export', `Exported ${metadata.name} as VAP 1.0.5`, 'VAP 1.0.5');
+    }
     
     setIsExporting(true);
     setExportPhase('جاري تحضير VAP 1.0.5...');
@@ -3312,11 +3341,16 @@ if (!this.JSON) { this.JSON = {}; }
         // Hex 33 = Decimal 51 (Level 5.1)
         const codec = totalPixels > 2228224 ? 'avc1.4d0033' : 'avc1.4d002a';
 
+        let bitrate = 8000000;
+        if (globalQuality === 'low') bitrate = 2000000;
+        if (globalQuality === 'medium') bitrate = 5000000;
+        if (globalQuality === 'high') bitrate = 12000000;
+
         videoEncoder.configure({
             codec: codec,
             width: videoW,
             height: videoH,
-            bitrate: 8000000, // 8 Mbps
+            bitrate: bitrate,
             framerate: fps
         });
 
@@ -3494,10 +3528,41 @@ if (!this.JSON) { this.JSON = {}; }
     }
   };
 
-  const handleMainExport = async () => {
+  // Enforce Allowed Format
+  useEffect(() => {
+    if (currentUser?.allowedExportFormat) {
+        const allowed = Array.isArray(currentUser.allowedExportFormat) 
+            ? currentUser.allowedExportFormat 
+            : [currentUser.allowedExportFormat];
+        
+        if (!allowed.includes(selectedFormat)) {
+             setSelectedFormat(allowed[0] || 'AE Project');
+        }
+    }
+  }, [currentUser, selectedFormat]);
+
+  const availableFormats = ['AE Project', 'SVGA 2.0', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP (MP4)', 'VAP 1.0.5'];
+  
+  const displayedFormats = useMemo(() => {
+      if (!currentUser?.allowedExportFormat) return availableFormats;
+      const allowed = Array.isArray(currentUser.allowedExportFormat) 
+          ? currentUser.allowedExportFormat 
+          : [currentUser.allowedExportFormat];
+      return availableFormats.filter(f => allowed.includes(f));
+  }, [currentUser, availableFormats]);
+
+  const handleMainExport = async (formatOverride?: string | any) => {
+    const currentFormat = (typeof formatOverride === 'string' && formatOverride) ? formatOverride : selectedFormat;
+
     if (!currentUser) {
       onLoginRequired();
       return;
+    }
+
+    // Special handling for VAP 1.0.5 - Handled separately to enforce subscription/permission without consuming free attempts
+    if (currentFormat === 'VAP 1.0.5') {
+        await handleVAP105Export(false);
+        return;
     }
 
     const { allowed, reason } = await checkAccess('Main Export');
@@ -3506,13 +3571,26 @@ if (!this.JSON) { this.JSON = {}; }
       return;
     }
 
-    if (selectedFormat === 'AE Project') await handleExportAEProject();
-    else if (selectedFormat === 'Image Sequence') await handleExportImageSequence();
-    else if (selectedFormat === 'GIF (Animation)') await handleExportGIF();
-    else if (selectedFormat === 'APNG (Animation)') await handleExportAPNG();
-    else if (selectedFormat === 'WebM (Video)') await handleExportWebM();
-    else if (selectedFormat === 'VAP 1.0.5') await handleVAP105Export();
-    else if (selectedFormat === 'VAP (MP4)') {
+    // Enforce restriction check again
+    let isAllowed = !currentUser.allowedExportFormat || 
+        (Array.isArray(currentUser.allowedExportFormat) 
+            ? currentUser.allowedExportFormat.includes(currentFormat) 
+            : currentUser.allowedExportFormat === currentFormat);
+
+    if (!isAllowed) {
+         alert(`عذراً، حسابك غير مصرح له بتصدير صيغة ${currentFormat}.`);
+         return;
+    }
+
+    // Log Activity
+    logActivity(currentUser, 'export', `Exported ${metadata.name}`, currentFormat);
+
+    if (currentFormat === 'AE Project') await handleExportAEProject();
+    else if (currentFormat === 'Image Sequence') await handleExportImageSequence();
+    else if (currentFormat === 'GIF (Animation)') await handleExportGIF();
+    else if (currentFormat === 'APNG (Animation)') await handleExportAPNG();
+    else if (currentFormat === 'WebM (Video)') await handleExportWebM();
+    else if (currentFormat === 'VAP (MP4)') {
         setIsExporting(true);
         setExportPhase('جاري إنشاء فيديو VAP (Alpha+RGB)...');
 
@@ -3878,10 +3956,10 @@ if (!this.JSON) { this.JSON = {}; }
             }
         }
     }
-    else if (selectedFormat === 'WebP (Animated)') {
+    else if (currentFormat === 'WebP (Animated)') {
         await handleExportWebP();
     }
-    else if (selectedFormat === 'SVGA 2.0' && typeof protobuf !== 'undefined') {
+    else if (currentFormat === 'SVGA 2.0' && typeof protobuf !== 'undefined') {
         const isEdgeFadeActive = fadeConfig.top > 0 || fadeConfig.bottom > 0 || fadeConfig.left > 0 || fadeConfig.right > 0;
 
         setIsExporting(true); 
@@ -4823,7 +4901,7 @@ if (!this.JSON) { this.JSON = {}; }
                            )}
                        </div>
                        <div className="flex gap-2">
-                           <button onClick={() => { setSelectedFormat('VAP (MP4)'); handleMainExport(); }} className="flex-1 py-4 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-2xl text-[10px] font-black uppercase hover:bg-indigo-500/30 transition-all">تصدير VAP (flutter_vap_plus)</button>
+                           <button onClick={() => { setSelectedFormat('VAP (MP4)'); handleMainExport('VAP (MP4)'); }} className="flex-1 py-4 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-2xl text-[10px] font-black uppercase hover:bg-indigo-500/30 transition-all">تصدير VAP (flutter_vap_plus)</button>
                            <button onClick={() => setShowVapHelp(true)} className="w-12 flex items-center justify-center bg-white/5 border border-white/5 rounded-2xl text-white hover:bg-white/10 transition-all">
                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                            </button>
@@ -4864,23 +4942,7 @@ if (!this.JSON) { this.JSON = {}; }
                         </div>
                     )}
                     
-                    <div className="space-y-4 pt-4 border-t border-white/5">
-                        <h4 className="text-white font-black text-xs uppercase tracking-widest text-emerald-400 mb-2">جودة التصدير (حجم الملف)</h4>
-                        <div className="flex gap-1">
-                            <button onClick={() => setGlobalQuality('low')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${globalQuality === 'low' ? 'bg-emerald-500 text-white border-emerald-500 shadow-glow-emerald' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}>
-                                منخفضة
-                                <span className="block text-[8px] opacity-70 font-normal mt-1">حجم صغير</span>
-                            </button>
-                            <button onClick={() => setGlobalQuality('medium')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${globalQuality === 'medium' ? 'bg-emerald-500 text-white border-emerald-500 shadow-glow-emerald' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}>
-                                متوسطة
-                                <span className="block text-[8px] opacity-70 font-normal mt-1">متوازن</span>
-                            </button>
-                            <button onClick={() => setGlobalQuality('high')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${globalQuality === 'high' ? 'bg-emerald-500 text-white border-emerald-500 shadow-glow-emerald' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}>
-                                عالية
-                                <span className="block text-[8px] opacity-70 font-normal mt-1">أفضل دقة</span>
-                            </button>
-                        </div>
-                    </div>
+
                     
                     {audioUrl && (
                         <div className="space-y-4 pt-4 border-t border-white/5">
@@ -5340,14 +5402,58 @@ class _MyAppState extends State<MyApp> {
                     </div>
                 </div>
               )}
+                    <div className="space-y-4 pt-4 border-t border-white/5">
+                        <h4 className="text-white font-black text-xs uppercase tracking-widest text-emerald-400 mb-2">جودة التصدير (حجم الملف)</h4>
+                        <div className="flex gap-1">
+                            <button onClick={() => setGlobalQuality('low')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${globalQuality === 'low' ? 'bg-emerald-500 text-white border-emerald-500 shadow-glow-emerald' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}>
+                                منخفضة
+                                <span className="block text-[8px] opacity-70 font-normal mt-1">حجم صغير</span>
+                            </button>
+                            <button onClick={() => setGlobalQuality('medium')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${globalQuality === 'medium' ? 'bg-emerald-500 text-white border-emerald-500 shadow-glow-emerald' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}>
+                                متوسطة
+                                <span className="block text-[8px] opacity-70 font-normal mt-1">متوازن</span>
+                            </button>
+                            <button onClick={() => setGlobalQuality('high')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase border transition-all ${globalQuality === 'high' ? 'bg-emerald-500 text-white border-emerald-500 shadow-glow-emerald' : 'bg-white/5 text-slate-400 border-white/5 hover:bg-white/10'}`}>
+                                عالية
+                                <span className="block text-[8px] opacity-70 font-normal mt-1">أفضل دقة</span>
+                            </button>
+                        </div>
+                    </div>
+
+              {/* VAP 1.0.5 Special Button - Always visible but locked if no permission */}
               <button 
-                onClick={handleVAP105Export}
-                className="w-full py-4 mb-4 bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-black rounded-xl shadow-glow-purple active:scale-95 flex items-center justify-center gap-2 transition-all hover:scale-[1.02]"
+                onClick={() => {
+                    if (!currentUser) {
+                        onLoginRequired();
+                        return;
+                    }
+                    
+                    const hasActiveSubscription = currentUser.subscriptionType && currentUser.subscriptionType !== 'none';
+                    const hasSpecificPermission = currentUser.allowedExportFormat && (
+                        Array.isArray(currentUser.allowedExportFormat) 
+                            ? currentUser.allowedExportFormat.includes('VAP 1.0.5') 
+                            : currentUser.allowedExportFormat === 'VAP 1.0.5'
+                    );
+                    
+                    const isAllowed = hasActiveSubscription || hasSpecificPermission;
+                    
+                    if (isAllowed) {
+                        handleVAP105Export(false);
+                    } else {
+                        onSubscriptionRequired();
+                    }
+                }}
+                className={`w-full py-4 mb-4 text-[11px] font-black rounded-xl shadow-glow-purple active:scale-95 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] ${
+                    ((currentUser?.subscriptionType && currentUser.subscriptionType !== 'none') || (currentUser?.allowedExportFormat && (Array.isArray(currentUser.allowedExportFormat) ? currentUser.allowedExportFormat.includes('VAP 1.0.5') : currentUser.allowedExportFormat === 'VAP 1.0.5')))
+                    ? 'bg-purple-600 hover:bg-purple-500 text-white'
+                    : 'bg-slate-800 text-slate-400 opacity-75'
+                }`}
              >
+                {!((currentUser?.subscriptionType && currentUser.subscriptionType !== 'none') || (currentUser?.allowedExportFormat && (Array.isArray(currentUser.allowedExportFormat) ? currentUser.allowedExportFormat.includes('VAP 1.0.5') : currentUser.allowedExportFormat === 'VAP 1.0.5'))) && <span className="text-xs">🔒</span>}
                 🚀 تصدير VAP 1.0.5 (خاص)
              </button>
              <div className="flex flex-wrap gap-2">
-                {['AE Project', 'SVGA 2.0', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP (MP4)', 'VAP 1.0.5'].map(f => (
+                {displayedFormats.map(f => (
                   <button key={f} onClick={() => setSelectedFormat(f)} className={`flex-1 py-3 px-2 rounded-xl text-[9px] font-black border transition-all whitespace-nowrap ${selectedFormat === f ? 'bg-sky-500 text-white border-sky-400' : 'bg-slate-950/40 text-slate-300'}`}>{f}</button>
                 ))}
              </div>

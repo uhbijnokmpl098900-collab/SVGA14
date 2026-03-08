@@ -73,6 +73,7 @@ export interface UserRecord {
   freeAttempts: number;
   createdAt: any;
   lastLogin: any;
+  allowedExportFormat?: string | string[]; // Restrict user to specific format(s)
 }
 
 export interface PresetBackground {
@@ -114,6 +115,7 @@ export interface ActivityLog {
   userName: string;
   action: 'login' | 'upload' | 'feature_usage' | 'subscription_activated';
   details: string; // e.g., "Uploaded file.mp4", "Used Video Converter"
+  exportFormat?: string; // e.g., "VAP", "GIF", "MP4"
   ip?: string;
   timestamp: any;
 }

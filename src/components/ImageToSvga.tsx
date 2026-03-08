@@ -18,6 +18,8 @@ import pako from 'pako';
 import { logActivity } from '../utils/logger';
 import { useAccessControl } from '../hooks/useAccessControl';
 
+declare var ImageDecoder: any;
+
 interface ImageToSvgaProps {
   currentUser?: UserRecord | null;
   onCancel?: () => void;
@@ -69,37 +71,114 @@ export const ImageToSvga: React.FC<ImageToSvgaProps> = ({ currentUser, onCancel,
     };
   }, []);
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
-      const newFiles = Array.from(e.target.files) as File[];
-      const newFrames: ImageFrame[] = [];
-      
-      let loadedCount = 0;
-      newFiles.forEach(file => {
+  const loadStaticImage = (file: File, framesArray: ImageFrame[]) => {
+    return new Promise<void>((resolve) => {
         const img = new Image();
         const url = URL.createObjectURL(file);
         img.onload = () => {
-          newFrames.push({
-            id: Math.random().toString(36).substr(2, 9),
-            file,
-            previewUrl: url,
-            width: img.width,
-            height: img.height
-          });
-          loadedCount++;
-          if (loadedCount === newFiles.length) {
-            setFrames(prev => {
-                const combined = [...prev, ...newFrames];
-                if (autoSize && combined.length > 0) {
-                    // Set canvas size to the first image's size if autoSize is on
-                    setCanvasSize({ width: combined[0].width, height: combined[0].height });
-                }
-                return combined;
+            framesArray.push({
+                id: Math.random().toString(36).substr(2, 9),
+                file,
+                previewUrl: url,
+                width: img.width,
+                height: img.height
             });
-          }
+            resolve();
         };
+        img.onerror = () => {
+            console.error("Failed to load image:", file.name);
+            resolve();
+        }
         img.src = url;
+    });
+  };
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files) as File[];
+      setIsProcessing(true);
+      setProgress(0);
+      
+      const newFrames: ImageFrame[] = [];
+      
+      for (const file of newFiles) {
+          const isAnimated = file.type === 'image/gif' || file.type === 'image/webp' || file.name.toLowerCase().endsWith('.gif') || file.name.toLowerCase().endsWith('.webp');
+          
+          if (isAnimated) {
+               if (typeof ImageDecoder === 'undefined') {
+                   alert("متصفحك لا يدعم استخراج إطارات الصور المتحركة (WebP/GIF). سيتم تحميل الصورة كإطار ثابت.");
+                   await loadStaticImage(file, newFrames);
+                   continue;
+               }
+
+               try {
+                   const buffer = await file.arrayBuffer();
+                   const decoder = new ImageDecoder({ data: new DataView(buffer), type: file.type });
+                   
+                   await decoder.tracks.ready;
+                   const track = decoder.tracks.selectedTrack;
+                   
+                   if (!track || track.frameCount <= 1) {
+                       // Not animated or single frame
+                       await loadStaticImage(file, newFrames);
+                       continue;
+                   }
+
+                   const frameCount = track.frameCount;
+                   
+                   for (let i = 0; i < frameCount; i++) {
+                       const result = await decoder.decode({ frameIndex: i });
+                       const videoFrame = result.image;
+                       
+                       const canvas = document.createElement('canvas');
+                       canvas.width = videoFrame.displayWidth;
+                       canvas.height = videoFrame.displayHeight;
+                       const ctx = canvas.getContext('2d');
+                       if (ctx) {
+                           ctx.drawImage(videoFrame, 0, 0);
+                           const url = canvas.toDataURL('image/png');
+                           
+                           // Create a blob from dataURL for the file object
+                           const res = await fetch(url);
+                           const blob = await res.blob();
+
+                           newFrames.push({
+                               id: Math.random().toString(36).substr(2, 9),
+                               file: new File([blob], `frame_${i}.png`, { type: 'image/png' }),
+                               previewUrl: url,
+                               width: canvas.width,
+                               height: canvas.height
+                           });
+                       }
+                       
+                       videoFrame.close();
+                       setProgress(Math.floor(((i + 1) / frameCount) * 100));
+                   }
+                   
+               } catch (err) {
+                   console.error("Error parsing animated image with ImageDecoder:", err);
+                   // Fallback to static load
+                   await loadStaticImage(file, newFrames);
+               }
+          } else {
+              // Static image
+              await loadStaticImage(file, newFrames);
+          }
+      }
+      
+      setFrames(prev => {
+          const combined = [...prev, ...newFrames];
+          if (autoSize && combined.length > 0 && prev.length === 0) {
+              setCanvasSize({ width: combined[0].width, height: combined[0].height });
+          }
+          return combined;
       });
+      
+      setIsProcessing(false);
+      setProgress(0);
+      
+      // Reset file input
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -902,7 +981,7 @@ export const ImageToSvga: React.FC<ImageToSvgaProps> = ({ currentUser, onCancel,
                 </div>
                 <div className="text-center">
                     <h3 className="text-white font-black text-sm">إضافة صور</h3>
-                    <p className="text-slate-500 text-[10px] uppercase tracking-widest mt-1">PNG, JPG, WEBP</p>
+                    <p className="text-slate-500 text-[10px] uppercase tracking-widest mt-1">PNG, JPG, WEBP, GIF</p>
                 </div>
             </div>
 

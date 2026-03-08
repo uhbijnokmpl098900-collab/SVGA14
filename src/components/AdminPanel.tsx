@@ -10,8 +10,11 @@ interface AdminPanelProps {
   onCancel: () => void;
 }
 
+const EXPORT_FORMATS = ['AE Project', 'SVGA 2.0', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP 1.0.5', 'VAP (MP4)'];
+
 export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel }) => {
   const [activeTab, setActiveTab] = useState<'users' | 'keys' | 'assets' | 'settings' | 'records'>('users');
+  const [dropdownState, setDropdownState] = useState<{ userId: string; x: number; y: number; position: 'top' | 'bottom' } | null>(null);
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [keys, setKeys] = useState<LicenseKey[]>([]);
@@ -97,6 +100,19 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
       fetchData(); // Refresh to show changes
     } catch (error) {
       console.error("Error setting subscription:", error);
+    }
+  };
+
+  const handleSetAllowedFormat = async (userId: string, formats: string[] | null) => {
+    try {
+        const value = (formats && formats.length > 0) ? formats : null;
+        await updateDoc(doc(db, 'users', userId), {
+            allowedExportFormat: value
+        });
+        setUsers(users.map(u => u.id === userId ? { ...u, allowedExportFormat: value || undefined } : u));
+    } catch (error) {
+        console.error("Error setting allowed format:", error);
+        alert("فشل تحديث الصيغة");
     }
   };
 
@@ -292,7 +308,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                         </tr>
                       </thead>
                       <tbody>
-                        {users.map(user => (
+                        {users.map((user, index) => (
                           <tr key={user.id} className="border-b border-white/5 hover:bg-white/5 transition-colors">
                             <td className="p-3 font-medium flex items-center gap-2">
                                 {user.name}
@@ -325,10 +341,10 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                                 <Trash2 className="w-4 h-4" />
                               </button>
                               <div className="relative group">
-                                <button className="p-1.5 hover:bg-indigo-500/20 text-indigo-400 rounded transition-colors">
+                                <button className="p-1.5 hover:bg-indigo-500/20 text-indigo-400 rounded transition-colors" title="تغيير الاشتراك">
                                   <RefreshCw className="w-4 h-4" />
                                 </button>
-                                <div className="absolute left-0 bottom-full mb-2 hidden group-hover:flex flex-col bg-slate-800 border border-white/10 rounded-lg p-1 z-10 w-32">
+                                <div className="absolute left-0 bottom-full mb-2 hidden group-hover:flex flex-col bg-slate-800 border border-white/10 rounded-lg p-1 z-10 w-32 shadow-xl">
                                   {['day', 'week', 'month', 'year'].map(type => (
                                     <button 
                                       key={type}
@@ -340,6 +356,44 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                                   ))}
                                 </div>
                               </div>
+                              
+                              {/* Format Restriction Dropdown */}
+                              <div className="relative">
+                                <button 
+                                    onClick={(e) => {
+                                        e.stopPropagation();
+                                        if (dropdownState?.userId === user.id) {
+                                            setDropdownState(null);
+                                        } else {
+                                            const rect = e.currentTarget.getBoundingClientRect();
+                                            const spaceBelow = window.innerHeight - rect.bottom;
+                                            const dropdownHeight = 320; // approx max height
+                                            
+                                            if (spaceBelow < dropdownHeight && rect.top > spaceBelow) {
+                                                // Flip up
+                                                setDropdownState({
+                                                    userId: user.id,
+                                                    x: rect.left,
+                                                    y: rect.top - 8,
+                                                    position: 'top'
+                                                });
+                                            } else {
+                                                // Down
+                                                setDropdownState({
+                                                    userId: user.id,
+                                                    x: rect.left,
+                                                    y: rect.bottom + 8,
+                                                    position: 'bottom'
+                                                });
+                                            }
+                                        }
+                                    }}
+                                    className={`p-1.5 rounded transition-colors ${user.allowedExportFormat ? 'bg-amber-500/20 text-amber-400' : 'hover:bg-slate-500/20 text-slate-400'}`} 
+                                    title="تحديد صيغة التصدير"
+                                >
+                                  <SettingsIcon className="w-4 h-4" />
+                                </button>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -347,6 +401,72 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                     </table>
                   </div>
                 </div>
+              )}
+
+              {/* Fixed Dropdown Portal */}
+              {dropdownState && (
+                  <>
+                      <div className="fixed inset-0 z-40" onClick={() => setDropdownState(null)}></div>
+                      <div 
+                          className="fixed z-50 bg-slate-800 border border-white/10 rounded-lg p-2 shadow-xl w-56 max-h-80 overflow-y-auto custom-scrollbar flex flex-col"
+                          style={{ 
+                              left: dropdownState.x, 
+                              top: dropdownState.position === 'bottom' ? dropdownState.y : 'auto',
+                              bottom: dropdownState.position === 'top' ? (window.innerHeight - dropdownState.y) : 'auto'
+                          }}
+                      >
+                          {(() => {
+                              const user = users.find(u => u.id === dropdownState.userId);
+                              if (!user) return null;
+                              
+                              return (
+                                  <>
+                                      <div className="flex gap-2 mb-2 sticky top-0 bg-slate-800 pb-2 z-10 border-b border-white/10">
+                                          <button 
+                                              onClick={() => handleSetAllowedFormat(user.id, null)}
+                                              className="flex-1 text-xs bg-green-500/20 text-green-400 py-1.5 rounded hover:bg-green-500/30 transition-colors"
+                                          >
+                                              السماح للكل
+                                          </button>
+                                          <button 
+                                              onClick={() => handleSetAllowedFormat(user.id, EXPORT_FORMATS)}
+                                              className="flex-1 text-xs bg-indigo-500/20 text-indigo-400 py-1.5 rounded hover:bg-indigo-500/30 transition-colors"
+                                          >
+                                              تحديد الكل
+                                          </button>
+                                      </div>
+                                      <div className="space-y-1">
+                                          {EXPORT_FORMATS.map(format => {
+                                              const currentFormats = Array.isArray(user.allowedExportFormat) 
+                                                  ? user.allowedExportFormat 
+                                                  : (user.allowedExportFormat ? [user.allowedExportFormat] : []);
+                                              const isSelected = currentFormats.includes(format);
+                                              
+                                              return (
+                                                  <button 
+                                                      key={format}
+                                                      onClick={() => {
+                                                          let newFormats = [...currentFormats];
+                                                          if (isSelected) {
+                                                              newFormats = newFormats.filter(f => f !== format);
+                                                          } else {
+                                                              newFormats.push(format);
+                                                          }
+                                                          handleSetAllowedFormat(user.id, newFormats);
+                                                      }}
+                                                      className={`w-full text-xs text-right px-2 py-1.5 hover:bg-white/10 rounded flex items-center justify-between transition-colors ${isSelected ? 'text-amber-400 font-bold bg-amber-500/10' : 'text-slate-300'}`}
+                                                  >
+                                                      <span>{format}</span>
+                                                      {isSelected && <CheckCircle className="w-3 h-3 flex-shrink-0" />}
+                                                  </button>
+                                              );
+                                          })}
+                                      </div>
+                                  </>
+                              );
+                          })()}
+                      </div>
+                  </>
               )}
 
               {activeTab === 'keys' && (
@@ -527,6 +647,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                         <tr className="border-b border-white/10 text-slate-400 text-sm">
                           <th className="p-3">المستخدم</th>
                           <th className="p-3">النشاط</th>
+                          <th className="p-3">الصيغة</th>
                           <th className="p-3">التفاصيل</th>
                           <th className="p-3">التاريخ</th>
                         </tr>
@@ -539,6 +660,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                                 <span className="px-2 py-1 rounded text-xs bg-slate-800 text-slate-300 border border-white/5">
                                     {log.action}
                                 </span>
+                            </td>
+                            <td className="p-3">
+                                {log.exportFormat && (
+                                    <span className={`px-2 py-1 rounded text-xs font-bold ${
+                                        log.exportFormat.includes('VAP') ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' :
+                                        log.exportFormat.includes('GIF') ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                                        log.exportFormat.includes('WebM') ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                                        'bg-slate-500/20 text-slate-400 border border-slate-500/30'
+                                    }`}>
+                                        {log.exportFormat}
+                                    </span>
+                                )}
                             </td>
                             <td className="p-3 text-slate-400 text-sm">{log.details}</td>
                             <td className="p-3 text-slate-500 text-xs font-mono">

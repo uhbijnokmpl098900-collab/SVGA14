@@ -79,8 +79,15 @@ const App: React.FC = () => {
       logActivity(currentUser, 'upload', `Uploaded file: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`);
     }
 
+    // Block WebP and GIF files as per request
+    if (file.name.toLowerCase().endsWith('.gif') || file.name.toLowerCase().endsWith('.webp') || file.type === 'image/gif' || file.type === 'image/webp') {
+        alert("عذراً، تم إيقاف دعم ملفات WebP و GIF مؤقتاً لضمان استقرار الموقع.");
+        URL.revokeObjectURL(fileUrl);
+        return;
+    }
+
     const isVideo = file.type.startsWith('video/') || file.name.toLowerCase().endsWith('.mp4') || file.name.toLowerCase().endsWith('.webm') || file.name.toLowerCase().endsWith('.mov');
-    const isImage = file.type.startsWith('image/') || file.name.toLowerCase().endsWith('.gif') || file.name.toLowerCase().endsWith('.webp');
+    const isImage = false; // Disabled image support
 
     if (isVideo || isImage) {
         // For simple MP4/WebM, try to extract frames immediately
