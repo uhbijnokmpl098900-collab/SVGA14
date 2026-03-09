@@ -105,7 +105,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
 
   const handleSetAllowedFormat = async (userId: string, formats: string[] | null) => {
     try {
-        const value = (formats && formats.length > 0) ? formats : null;
+        // Use formats directly to allow empty array (Block All) or null (Default)
+        const value = formats;
         await updateDoc(doc(db, 'users', userId), {
             allowedExportFormat: value
         });
@@ -421,25 +422,31 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                               
                               return (
                                   <>
-                                      <div className="flex gap-2 mb-2 sticky top-0 bg-slate-800 pb-2 z-10 border-b border-white/10">
+                                      <div className="flex gap-2 mb-2 sticky top-0 bg-slate-800 pb-2 z-10 border-b border-white/10 flex-wrap">
                                           <button 
                                               onClick={() => handleSetAllowedFormat(user.id, null)}
-                                              className="flex-1 text-xs bg-green-500/20 text-green-400 py-1.5 rounded hover:bg-green-500/30 transition-colors"
+                                              className="flex-1 text-[10px] bg-green-500/20 text-green-400 py-1.5 rounded hover:bg-green-500/30 transition-colors whitespace-nowrap"
                                           >
-                                              السماح للكل
+                                              الوضع الافتراضي
                                           </button>
                                           <button 
                                               onClick={() => handleSetAllowedFormat(user.id, EXPORT_FORMATS)}
-                                              className="flex-1 text-xs bg-indigo-500/20 text-indigo-400 py-1.5 rounded hover:bg-indigo-500/30 transition-colors"
+                                              className="flex-1 text-[10px] bg-indigo-500/20 text-indigo-400 py-1.5 rounded hover:bg-indigo-500/30 transition-colors whitespace-nowrap"
                                           >
                                               تحديد الكل
+                                          </button>
+                                          <button 
+                                              onClick={() => handleSetAllowedFormat(user.id, [])}
+                                              className="flex-1 text-[10px] bg-red-500/20 text-red-400 py-1.5 rounded hover:bg-red-500/30 transition-colors whitespace-nowrap"
+                                          >
+                                              إلغاء التحديد
                                           </button>
                                       </div>
                                       <div className="space-y-1">
                                           {EXPORT_FORMATS.map(format => {
                                               const currentFormats = Array.isArray(user.allowedExportFormat) 
                                                   ? user.allowedExportFormat 
-                                                  : (user.allowedExportFormat ? [user.allowedExportFormat] : []);
+                                                  : (user.allowedExportFormat ? [user.allowedExportFormat] : EXPORT_FORMATS);
                                               const isSelected = currentFormats.includes(format);
                                               
                                               return (

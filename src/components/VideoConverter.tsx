@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { FileMetadata, UserRecord } from '../types';
 import { 
@@ -59,6 +59,20 @@ export const VideoConverter: React.FC<VideoConverterProps> = ({ currentUser, onC
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioInputRef = useRef<HTMLInputElement>(null);
 
+  const [hiddenFormats, setHiddenFormats] = useState<string[]>(() => {
+      const saved = localStorage.getItem('quantum_hidden_formats');
+      return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+      const handleStorage = () => {
+          const saved = localStorage.getItem('quantum_hidden_formats');
+          if (saved) setHiddenFormats(JSON.parse(saved));
+      };
+      window.addEventListener('storage', handleStorage);
+      return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
   const formats = [
     { id: 'VAP (MP4)', name: 'VAP (Alpha+RGB)', icon: '📹', cost: 1, desc: 'فيديو مع قناة شفافية منفصلة' },
     { id: 'VAP 1.0.5', name: 'VAP 1.0.5 (Special)', icon: '🚀', cost: 1, desc: 'تصدير خاص VAP 1.0.5' },
@@ -67,7 +81,26 @@ export const VideoConverter: React.FC<VideoConverterProps> = ({ currentUser, onC
     { id: 'APNG (Animation)', name: 'APNG الشفاف', icon: '🎞️', cost: 1, desc: 'جودة أعلى من GIF مع شفافية كاملة' },
     { id: 'WebP (Animated)', name: 'WebP متحرك', icon: '💫', cost: 1, desc: 'أفضل جودة وحجم للويب (Stickers)' },
     { id: 'WebM (Video)', name: 'WebM شفاف', icon: '🎥', cost: 1, desc: 'فيديو عالي الجودة للويب مع شفافية' },
-  ];
+  ].filter(f => {
+    // Check local hidden formats
+    if (hiddenFormats.includes(f.id)) return false;
+    
+    // Check admin restricted formats
+    if (currentUser?.allowedExportFormat) {
+        const allowed = Array.isArray(currentUser.allowedExportFormat) 
+            ? currentUser.allowedExportFormat 
+            : [currentUser.allowedExportFormat];
+        return allowed.includes(f.id);
+    }
+    
+    return true;
+  });
+
+  useEffect(() => {
+      if (!formats.find(f => f.id === selectedFormat) && formats.length > 0) {
+          setSelectedFormat(formats[0].id);
+      }
+  }, [formats, selectedFormat]);
 
   const applyTransparencyEffects = (ctx: CanvasRenderingContext2D, width: number, height: number, configOverride?: typeof fadeConfig) => {
     const imageData = ctx.getImageData(0, 0, width, height);

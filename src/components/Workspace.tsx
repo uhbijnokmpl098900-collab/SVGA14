@@ -22,8 +22,8 @@ import { db } from '../lib/firebase';
 import { collection, getDocs } from 'firebase/firestore';
 import { VapPlayer } from './VapPlayer';
 import { useLanguage } from '../contexts/LanguageContext';
-
 import { useAccessControl } from '../hooks/useAccessControl';
+import { svgaSchema } from '../svga-proto';
 
 interface WorkspaceProps {
   metadata: FileMetadata;
@@ -33,6 +33,7 @@ interface WorkspaceProps {
   onLoginRequired: () => void;
   onSubscriptionRequired: () => void;
   globalQuality?: 'low' | 'medium' | 'high';
+  onFileReplace?: (meta: FileMetadata) => void;
 }
 
 interface CustomLayer {
@@ -49,7 +50,7 @@ interface CustomLayer {
 
 const TRANSPARENT_PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
-export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata, onCancel, settings, currentUser, onLoginRequired, onSubscriptionRequired, globalQuality: initialGlobalQuality = 'high' }) => {
+export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata, onCancel, settings, currentUser, onLoginRequired, onSubscriptionRequired, globalQuality: initialGlobalQuality = 'high', onFileReplace }) => {
   const { checkAccess } = useAccessControl();
   const { t, dir } = useLanguage();
   const [metadata, setMetadata] = useState<FileMetadata>(initialMetadata);
@@ -79,7 +80,24 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
   const [searchQuery, setSearchQuery] = useState('');
   const [assetsLoading, setAssetsLoading] = useState(true);
   const [scale, setScale] = useState(1);
-  const [activeSideTab, setActiveSideTab] = useState<'layers' | 'transforms' | 'bg' | 'optimize'>('transforms');
+  const [activeSideTab, setActiveSideTab] = useState<'layers' | 'transforms' | 'bg' | 'optimize' | 'settings'>('transforms');
+  const [hiddenFormats, setHiddenFormats] = useState<string[]>(() => {
+      const saved = localStorage.getItem('quantum_hidden_formats');
+      return saved ? JSON.parse(saved) : [];
+  });
+
+  useEffect(() => {
+      localStorage.setItem('quantum_hidden_formats', JSON.stringify(hiddenFormats));
+  }, [hiddenFormats]);
+
+  useEffect(() => {
+      const handleStorage = () => {
+          const saved = localStorage.getItem('quantum_hidden_formats');
+          if (saved) setHiddenFormats(JSON.parse(saved));
+      };
+      window.addEventListener('storage', handleStorage);
+      return () => window.removeEventListener('storage', handleStorage);
+  }, []);
 
   const [presetBgs, setPresetBgs] = useState<PresetBackground[]>([]);
   const [previewBg, setPreviewBg] = useState<string | null>(null);
@@ -1823,6 +1841,412 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
     setCustomLayers(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
   };
 
+  const getProcessedSVGAData = async (isAEExport = false) => {
+      const isEdgeFadeActive = fadeConfig.top > 0 || fadeConfig.bottom > 0 || fadeConfig.left > 0 || fadeConfig.right > 0;
+      const root = protobuf.parse(svgaSchema).root;
+      const MovieEntity = root.lookupType("com.opensource.svga.MovieEntity");
+      let message: any;
+      let imagesData: Record<string, any> = {};
+
+      if (metadata.type === 'SVGA') {
+          let buffer: ArrayBuffer;
+          if (metadata.originalFile) {
+              buffer = await metadata.originalFile.arrayBuffer();
+          } else if (metadata.fileUrl) {
+              const res = await fetch(metadata.fileUrl);
+              buffer = await res.arrayBuffer();
+          } else {
+              throw new Error("No original file available.");
+          }
+
+          const uint8Array = new Uint8Array(buffer);
+          const isZip = uint8Array[0] === 0x50 && uint8Array[1] === 0x4B && uint8Array[2] === 0x03 && uint8Array[3] === 0x04;
+
+          if (isZip) {
+              const JSZip = (window as any).JSZip;
+              if (!JSZip) throw new Error("JSZip not loaded");
+              const zip = await JSZip.loadAsync(buffer);
+              const binaryFile = zip.file("movie.binary");
+              if (!binaryFile) {
+                  throw new Error("Invalid SVGA 1.0 file: movie.binary not found.");
+              }
+              const binaryData = await binaryFile.async("uint8array");
+              message = MovieEntity.decode(binaryData);
+              
+              message.images = message.images || {};
+              for (const filename of Object.keys(zip.files)) {
+                  if (filename.endsWith('.png') || filename.endsWith('.jpg') || filename.endsWith('.jpeg')) {
+                      const key = filename.replace(/\.(png|jpg|jpeg)$/, '');
+                      const imgData = await zip.file(filename)?.async("uint8array");
+                      if (imgData) {
+                          message.images[key] = imgData;
+                      }
+                  }
+              }
+          } else {
+              const inflated = pako.inflate(uint8Array);
+              message = MovieEntity.decode(inflated);
+          }
+
+          if (message.sprites) {
+              // Use metadata.videoItem.sprites as the source of truth if it exists, 
+              // but preserve original sprite data if we're just filtering/editing.
+              // For duplicated layers, we MUST use metadata.videoItem.sprites.
+              message.sprites = (metadata.videoItem.sprites || message.sprites).filter((s: any) => !deletedKeys.has(s.imageKey)).map((s: any) => JSON.parse(JSON.stringify(s)));
+          }
+          if (message.images) {
+              // Ensure all images from metadata.videoItem.images are included
+              const combinedImages = { ...message.images, ...(metadata.videoItem.images || {}) };
+              deletedKeys.forEach(key => {
+                  delete combinedImages[key];
+              });
+              message.images = combinedImages;
+          }
+
+          imagesData = message.images || {};
+      } else {
+          message = {
+              version: "2.0",
+              params: {
+                  viewBoxWidth: metadata.dimensions?.width || 750,
+                  viewBoxHeight: metadata.dimensions?.height || 750,
+                  fps: metadata.fps || 30,
+                  frames: metadata.frames || 0
+              },
+              images: {},
+              sprites: (metadata.videoItem.sprites || []).filter((s: any) => !deletedKeys.has(s.imageKey)).map((s: any) => JSON.parse(JSON.stringify(s))),
+              audios: [...(metadata.videoItem.audios || [])]
+          };
+          
+          const allImageKeys = new Set<string>();
+          (metadata.videoItem.sprites || []).forEach((s: any) => allImageKeys.add(s.imageKey));
+          Object.keys(layerImages).forEach(k => allImageKeys.add(k));
+          
+          for (const key of Array.from(allImageKeys)) {
+              if (deletedKeys.has(key)) continue;
+              let finalBase64 = layerImages[key] || "";
+              if (!finalBase64) continue;
+              const binaryString = atob(finalBase64.split(',')[1]);
+              const bytes = new Uint8Array(binaryString.length);
+              for (let j = 0; j < binaryString.length; j++) bytes[j] = binaryString.charCodeAt(j);
+              imagesData[key] = bytes;
+          }
+          message.images = imagesData;
+      }
+
+      const keys = Object.keys(imagesData);
+      for (let i = 0; i < keys.length; i++) {
+          const key = keys[i];
+          if (deletedKeys.has(key)) continue;
+
+          let finalBase64 = "";
+          if (layerImages[key]) {
+              finalBase64 = await getProcessedAsset(key);
+          } else {
+              const imgData = imagesData[key];
+              if (typeof imgData === 'string') {
+                  finalBase64 = imgData.startsWith('data:') ? imgData : `data:image/png;base64,${imgData}`;
+              } else if (imgData instanceof Uint8Array) {
+                  let binary = '';
+                  const len = imgData.byteLength;
+                  for (let k = 0; k < len; k++) {
+                      binary += String.fromCharCode(imgData[k]);
+                  }
+                  finalBase64 = `data:image/png;base64,${btoa(binary)}`;
+              }
+          }
+
+          if (!finalBase64) continue;
+          
+          const hasColorTint = !!assetColors[key];
+          // For AE export, we don't want to scale down the assets unless necessary, 
+          // but we DO want color tints if applied.
+          if ((!isAEExport && exportScale < 0.99) || isEdgeFadeActive || hasColorTint) {
+              const img = new Image();
+              img.src = finalBase64;
+              await new Promise(r => img.onload = r);
+              const canvas = document.createElement('canvas');
+              const targetScale = (!isAEExport && exportScale < 0.99) ? exportScale : 1.0;
+              canvas.width = Math.floor(img.width * targetScale);
+              canvas.height = Math.floor(img.height * targetScale);
+              
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                  if (hasColorTint) {
+                      ctx.shadowColor = assetColors[key];
+                      ctx.shadowBlur = 2;
+                      ctx.shadowOffsetX = 0;
+                      ctx.shadowOffsetY = 0;
+                  }
+
+                  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                  
+                  if (isEdgeFadeActive) {
+                      applyTransparencyEffects(ctx, canvas.width, canvas.height);
+                  }
+
+                  finalBase64 = canvas.toDataURL('image/png');
+              }
+          }
+
+          const binaryString = atob(finalBase64.split(',')[1]);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let j = 0; j < binaryString.length; j++) bytes[j] = binaryString.charCodeAt(j);
+          imagesData[key] = bytes;
+      }
+      
+      message.images = imagesData;
+
+      // Ensure all sprites have an image entry (fix for missing layers)
+      if (message.sprites) {
+          message.sprites.forEach((s: any) => {
+              if (s.imageKey && !imagesData[s.imageKey]) {
+                  const binaryString = atob(TRANSPARENT_PIXEL.split(',')[1]);
+                  const bytes = new Uint8Array(binaryString.length);
+                  for (let j = 0; j < binaryString.length; j++) bytes[j] = binaryString.charCodeAt(j);
+                  imagesData[s.imageKey] = bytes;
+              }
+          });
+      }
+
+      const origW = message.params.viewBoxWidth;
+      const origH = message.params.viewBoxHeight;
+
+      // Skip preview-specific transformations for AE export
+      if (!isAEExport) {
+          const scaleX = videoWidth / origW;
+          const scaleY = videoHeight / origH;
+          
+          const fitScale = Math.min(scaleX, scaleY);
+          const fitOffsetX = (videoWidth - origW * fitScale) / 2;
+          const fitOffsetY = (videoHeight - origH * fitScale) / 2;
+
+          if (message.sprites) {
+              message.sprites.forEach((sprite: any) => {
+                  if (sprite.frames) {
+                      sprite.frames.forEach((frame: any) => {
+                          const cx = videoWidth / 2;
+                          const cy = videoHeight / 2;
+                          const totalScale = fitScale * svgaScale;
+
+                          if (frame.layout) {
+                              let fx = frame.layout.x * fitScale + fitOffsetX;
+                              let fy = frame.layout.y * fitScale + fitOffsetY;
+                              let fw = frame.layout.width * fitScale;
+                              let fh = frame.layout.height * fitScale;
+
+                              frame.layout.x = (fx - cx) * svgaScale + cx + svgaPos.x;
+                              frame.layout.y = (fy - cy) * svgaScale + cy + svgaPos.y;
+                              frame.layout.width = fw * svgaScale;
+                              frame.layout.height = fh * svgaScale;
+                          }
+
+                          if (frame.transform) {
+                              if (frame.layout) {
+                                  frame.transform.tx *= totalScale;
+                                  frame.transform.ty *= totalScale;
+                              } else {
+                                   let ftx = frame.transform.tx * fitScale + fitOffsetX;
+                                   let fty = frame.transform.ty * fitScale + fitOffsetY;
+                                   
+                                   frame.transform.tx = (ftx - cx) * svgaScale + cx + svgaPos.x;
+                                   frame.transform.ty = (fty - cy) * svgaScale + cy + svgaPos.y;
+                                   
+                                   frame.transform.a *= totalScale;
+                                   frame.transform.b *= totalScale;
+                                   frame.transform.c *= totalScale;
+                                   frame.transform.d *= totalScale;
+                              }
+                          }
+                      });
+                  }
+              });
+          }
+
+          message.params.viewBoxWidth = videoWidth;
+          message.params.viewBoxHeight = videoHeight;
+      }
+
+      const backLayers = customLayers.filter(l => l.zIndexMode === 'back').reverse();
+      for (const layer of backLayers) {
+          try {
+              const layerKey = layer.id;
+              let bytes: Uint8Array | null = null;
+
+              if (layer.url.startsWith('blob:')) {
+                  const response = await fetch(layer.url);
+                  const arrayBuffer = await response.arrayBuffer();
+                  bytes = new Uint8Array(arrayBuffer);
+              } else if (layer.url.includes(',')) {
+                  const binary = atob(layer.url.split(',')[1]);
+                  bytes = new Uint8Array(binary.length);
+                  for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+              }
+
+              if (!bytes) continue;
+              message.images[layerKey] = bytes;
+
+              const finalWidth = layer.width * layer.scale;
+              const finalHeight = layer.height * layer.scale;
+              
+              // For AE export, we might need to adjust custom layer positions to match original viewBox
+              let lx = layer.x;
+              let ly = layer.y;
+              let lw = finalWidth;
+              let lh = finalHeight;
+
+              if (isAEExport) {
+                  const scaleX = origW / videoWidth;
+                  const scaleY = origH / videoHeight;
+                  lx *= scaleX;
+                  ly *= scaleY;
+                  lw *= scaleX;
+                  lh *= scaleY;
+              }
+
+              const layerFrame = {
+                  alpha: 1.0,
+                  layout: { 
+                      x: parseFloat(lx.toString()), 
+                      y: parseFloat(ly.toString()), 
+                      width: parseFloat(lw.toString()), 
+                      height: parseFloat(lh.toString()) 
+                  },
+                  transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+              };
+              if (!message.sprites) message.sprites = [];
+              message.sprites.unshift({ imageKey: layerKey, frames: Array(message.params.frames || 1).fill(layerFrame) });
+          } catch (e) {
+              console.error("Failed to process back layer:", layer.id, e);
+          }
+      }
+
+      const frontLayers = customLayers.filter(l => l.zIndexMode === 'front');
+      for (const layer of frontLayers) {
+          try {
+              const layerKey = layer.id;
+              let bytes: Uint8Array | null = null;
+
+              if (layer.url.startsWith('blob:')) {
+                  const response = await fetch(layer.url);
+                  const arrayBuffer = await response.arrayBuffer();
+                  bytes = new Uint8Array(arrayBuffer);
+              } else if (layer.url.includes(',')) {
+                  const binary = atob(layer.url.split(',')[1]);
+                  bytes = new Uint8Array(binary.length);
+                  for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+              }
+
+              if (!bytes) continue;
+              message.images[layerKey] = bytes;
+
+              const finalWidth = layer.width * layer.scale;
+              const finalHeight = layer.height * layer.scale;
+              
+              let lx = layer.x;
+              let ly = layer.y;
+              let lw = finalWidth;
+              let lh = finalHeight;
+
+              if (isAEExport) {
+                  const scaleX = origW / videoWidth;
+                  const scaleY = origH / videoHeight;
+                  lx *= scaleX;
+                  ly *= scaleY;
+                  lw *= scaleX;
+                  lh *= scaleY;
+              }
+
+              const layerFrame = {
+                  alpha: 1.0,
+                  layout: { 
+                      x: parseFloat(lx.toString()), 
+                      y: parseFloat(ly.toString()), 
+                      width: parseFloat(lw.toString()), 
+                      height: parseFloat(lh.toString()) 
+                  },
+                  transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+              };
+              if (!message.sprites) message.sprites = [];
+              message.sprites.push({ imageKey: layerKey, frames: Array(message.params.frames || 1).fill(layerFrame) });
+          } catch (e) {
+              console.error("Failed to process front layer:", layer.id, e);
+          }
+      }
+
+      const wmKey = "quantum_wm_layer_fixed";
+      if (watermark) {
+          const binary = atob(watermark.split(',')[1]);
+          const bytes = new Uint8Array(binary.length);
+          for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+          message.images[wmKey] = bytes;
+
+          const wmSize = await getImageSize(watermark);
+          const wmWidth = videoWidth * wmScale;
+          const wmHeight = wmWidth * (wmSize.h / wmSize.w);
+          const wmX = (videoWidth / 2) - (wmWidth / 2) + wmPos.x;
+          const wmY = (videoHeight / 2) - (wmHeight / 2) + wmPos.y;
+          
+          let finalWmX = wmX;
+          let finalWmY = wmY;
+          let finalWmW = wmWidth;
+          let finalWmH = wmHeight;
+
+          if (isAEExport) {
+              const scaleX = origW / videoWidth;
+              const scaleY = origH / videoHeight;
+              finalWmX *= scaleX;
+              finalWmY *= scaleY;
+              finalWmW *= scaleX;
+              finalWmH *= scaleY;
+          }
+
+          const wmFrame = {
+              alpha: 1.0,
+              layout: { x: finalWmX || 0, y: finalWmY || 0, width: finalWmW, height: finalWmH },
+              transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+          };
+          if (!message.sprites) message.sprites = [];
+          message.sprites.push({
+              imageKey: wmKey,
+              frames: Array(message.params.frames || 1).fill(wmFrame)
+          });
+      }
+
+      if (audioUrl) {
+          const audioKey = "quantum_audio_track";
+          let bytes: Uint8Array | null = null;
+          
+          if (audioFile) {
+              const arrayBuffer = await audioFile.arrayBuffer();
+              bytes = new Uint8Array(arrayBuffer);
+          } else if (audioUrl === originalAudioUrl) {
+               bytes = null;
+          } else {
+              try {
+                  const response = await fetch(audioUrl);
+                  const arrayBuffer = await response.arrayBuffer();
+                  bytes = new Uint8Array(arrayBuffer);
+              } catch (e) { console.error("Failed to fetch audio", e); }
+          }
+
+          if (bytes) {
+              message.images[audioKey] = bytes; 
+              message.audios = [{
+                  audioKey: audioKey,
+                  startFrame: 0,
+                  endFrame: message.params.frames || 0,
+                  startTime: 0,
+                  totalTime: Math.floor(((message.params.frames || 0) / (message.params.fps || 30)) * 1000)
+              }];
+          }
+      } else {
+          message.audios = [];
+      }
+
+      return { message, imagesData, originalWidth: origW, originalHeight: origH };
+  };
+
   const handleExportAEProject = async () => {
     if (!svgaInstance) return;
 
@@ -1831,21 +2255,18 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
     try {
       const zip = new JSZip();
       const assetsFolder = zip.folder("assets");
-      const imagesMapping: Record<string, string> = {};
-      const keys = Object.keys(layerImages);
+      
+      const { message, imagesData, originalWidth, originalHeight } = await getProcessedSVGAData(true);
 
+      const keys = Object.keys(imagesData);
       for (let i = 0; i < keys.length; i++) {
         const key = keys[i];
-        if (deletedKeys.has(key)) continue;
-        const processedBase64 = await getProcessedAsset(key);
         const fileName = `${key}.png`;
-        assetsFolder.file(fileName, processedBase64.split(',')[1], { base64: true });
-        imagesMapping[key] = fileName;
+        assetsFolder.file(fileName, imagesData[key]);
         setProgress(Math.floor((i / keys.length) * 30));
       }
 
       if (previewBg) zip.file(`background.png`, previewBg.split(',')[1], { base64: true });
-      if (watermark) zip.file(`watermark.png`, watermark.split(',')[1], { base64: true });
 
       // Handle Audio Export
       let audioFilename = '';
@@ -1860,7 +2281,6 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
               const response = await fetch(audioUrl);
               const blob = await response.blob();
               const audioBuffer = await blob.arrayBuffer();
-              // Try to guess extension from MIME type or default to mp3
               const ext = blob.type.split('/')[1] || 'mp3';
               audioFilename = `audio.${ext}`;
               assetsFolder.file(audioFilename, audioBuffer);
@@ -1870,33 +2290,63 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
           }
       }
 
-      const sprites = (metadata.videoItem.sprites || []).filter((s: any) => !deletedKeys.has(s.imageKey));
-      
-      // Use the most accurate FPS and frame count from videoItem if available
-      const exportFps = metadata.videoItem?.FPS || metadata.fps || 30;
-      const exportFrames = metadata.videoItem?.frames || metadata.frames || 0;
+      const sprites = message.sprites || [];
+      const exportFps = message.params?.fps || metadata.fps || 30;
+      const exportFrames = message.params?.frames || metadata.frames || 0;
+      const svgaVersion = "2.0"; // Force 2.0 logic for AE export as requested
+
+      const round = (n: number) => Math.round(n * 1000000) / 1000000;
 
       const manifest = {
-        version: "5.7-QUANTUM-SYNC",
-        width: videoWidth,
-        height: videoHeight,
+        version: "7.0-QUANTUM-ULTRA",
+        format: "SVGA 2.0",
+        svgaVersion: svgaVersion,
+        width: originalWidth,
+        height: originalHeight,
         fps: exportFps,
         frames: exportFrames,
         adjustments: {
-            svga: { pos: svgaPos, scale: svgaScale },
+            svga: { pos: {x:0, y:0}, scale: 1 },
             bg: { pos: bgPos, scale: bgScale, exists: !!previewBg },
-            wm: { pos: wmPos, scale: wmScale, exists: !!watermark },
+            wm: { pos: {x:0, y:0}, scale: 1, exists: false },
             audio: { exists: hasAudio, filename: audioFilename }
         },
-        sprites: sprites.map((s: any) => ({
-          imageKey: s.imageKey,
-          frames: s.frames.map((f: any) => ({
-            a: f.alpha,
-            l: f.layout,
-            t: f.transform
-          }))
-        }))
+        sprites: sprites.map((s: any, sIdx: number) => {
+          const allFrames: any[] = [];
+          
+          s.frames.forEach((f: any, fIdx: number) => {
+            const currentFrameData = {
+              f: fIdx,
+              a: f.alpha !== undefined ? round(f.alpha) : 1,
+              l: { 
+                x: round(f.layout?.x || 0), 
+                y: round(f.layout?.y || 0), 
+                w: round(f.layout?.width || 0), 
+                h: round(f.layout?.height || 0) 
+              },
+              t: f.transform ? {
+                a: round(f.transform.a),
+                b: round(f.transform.b),
+                c: round(f.transform.c),
+                d: round(f.transform.d),
+                tx: round(f.transform.tx),
+                ty: round(f.transform.ty)
+              } : null
+            };
+            allFrames.push(currentFrameData);
+          });
+
+          return {
+            imageKey: s.imageKey || `layer_${sIdx}`,
+            matteKey: s.matteKey || null,
+            blendMode: s.blendMode || null,
+            hasShapes: !!(s.shapes && s.shapes.length > 0),
+            keyframes: allFrames
+          };
+        })
       };
+
+      zip.file("manifest.json", JSON.stringify(manifest));
 
       const jsxContent = `
 if (!this.JSON) { this.JSON = {}; }
@@ -1913,115 +2363,200 @@ if (!this.JSON) { this.JSON = {}; }
 }());
 
 (function() {
-    var data = ${JSON.stringify(manifest)};
-    app.beginUndoGroup("Quantum SVGA Rebuild v5.7");
+    var scriptFile = new File($.fileName);
+    var projectFolder = scriptFile.parent;
+    var manifestFile = new File(projectFolder.fsName + "/manifest.json");
     
-    // Ensure duration is calculated precisely to match frame count
+    if (!manifestFile.exists) {
+        alert("❌ Error: manifest.json not found in the same folder as the script!");
+        return;
+    }
+    
+    manifestFile.open("r");
+    var data = JSON.parse(manifestFile.read());
+    manifestFile.close();
+
+    app.beginUndoGroup("Quantum SVGA Rebuild v7.0");
+    
     var compDuration = data.frames / data.fps;
     if (compDuration <= 0) compDuration = 1/data.fps;
     
     var mainComp = app.project.items.addComp("Quantum_Animation_Suite", data.width, data.height, 1.0, compDuration, data.fps);
     mainComp.bgColor = [0,0,0];
-    mainComp.frameRate = data.fps; // Explicitly set frame rate again to be safe
+    mainComp.frameRate = data.fps;
     
     var masterNull = mainComp.layers.addNull();
-    masterNull.name = "GLOBAL_SVGA_TRANSFORM";
-    masterNull.position.setValue([data.width/2 + data.adjustments.svga.pos.x, data.height/2 + data.adjustments.svga.pos.y]);
-    masterNull.scale.setValue([data.adjustments.svga.scale * 100, data.adjustments.svga.scale * 100]);
+    masterNull.name = "SVGA_ROOT_TRANSFORM";
+    masterNull.position.setValue([0, 0]); // Absolute origin
+    masterNull.scale.setValue([100, 100]);
 
-    var assetsFolder = Folder.selectDialog("Select the 'assets' folder extracted from the ZIP");
+    var assetsFolder = new Folder(projectFolder.fsName + "/assets");
+    if (!assetsFolder.exists) {
+        assetsFolder = Folder.selectDialog("Select the 'assets' folder");
+    }
     if (!assetsFolder) { app.endUndoGroup(); return; }
 
     // Import Audio
     if (data.adjustments.audio.exists) {
         var audioFile = File(assetsFolder.fsName + "/" + data.adjustments.audio.filename);
         if (audioFile.exists) {
-            var audioItem = app.project.importFile(new ImportOptions(audioFile));
-            var audioLayer = mainComp.layers.add(audioItem);
-            audioLayer.name = "Audio_Track";
+            try {
+                var audioItem = app.project.importFile(new ImportOptions(audioFile));
+                var audioLayer = mainComp.layers.add(audioItem);
+                audioLayer.name = "Audio_Track";
+            } catch(e) { $.writeln("Audio import failed: " + e); }
         }
     }
 
+    var layerMap = {};
+    var blendMap = {
+        "ADD": BlendingMode.ADD,
+        "SCREEN": BlendingMode.SCREEN,
+        "MULTIPLY": BlendingMode.MULTIPLY,
+        "OVERLAY": BlendingMode.OVERLAY,
+        "DARKEN": BlendingMode.DARKEN,
+        "LIGHTEN": BlendingMode.LIGHTEN,
+        "COLOR_DODGE": BlendingMode.COLOR_DODGE,
+        "COLOR_BURN": BlendingMode.COLOR_BURN,
+        "HARD_LIGHT": BlendingMode.HARD_LIGHT,
+        "SOFT_LIGHT": BlendingMode.SOFT_LIGHT,
+        "DIFFERENCE": BlendingMode.DIFFERENCE,
+        "EXCLUSION": BlendingMode.EXCLUSION
+    };
+
     for (var i = 0; i < data.sprites.length; i++) {
         var sprite = data.sprites[i];
-        var imgFile = File(assetsFolder.fsName + "/" + sprite.imageKey + ".png");
-        if (!imgFile.exists) continue;
+        var layer;
+        var footage;
+
+        if (sprite.imageKey) {
+            var imgFile = File(assetsFolder.fsName + "/" + sprite.imageKey + ".png");
+            if (imgFile.exists) {
+                try {
+                    footage = app.project.importFile(new ImportOptions(imgFile));
+                    layer = mainComp.layers.add(footage);
+                    layer.anchorPoint.setValue([0, 0]);
+                } catch(e) {
+                    $.writeln("Failed to import: " + imgFile.fsName);
+                }
+            }
+        }
         
-        var footage = app.project.importFile(new ImportOptions(imgFile));
-        var layer = mainComp.layers.add(footage);
-        layer.name = "Layer_" + i + "_" + sprite.imageKey;
+        if (!layer) {
+            // Create a placeholder for shape layers or missing assets
+            var layerName = "Layer_" + i + (sprite.imageKey ? "_" + sprite.imageKey : "_Shape");
+            if (sprite.hasShapes) {
+                layer = mainComp.layers.addShape();
+                layer.name = layerName + "_[VECTOR]";
+            } else {
+                layer = mainComp.layers.addSolid([0.2, 0.2, 0.2], layerName, 100, 100, 1.0);
+                layer.guideLayer = true;
+            }
+            layer.anchorPoint.setValue([0, 0]);
+        }
+
+        layer.name = "Layer_" + i + "_" + (sprite.imageKey || "Shape");
         layer.parent = masterNull;
-        layer.anchorPoint.setValue([footage.width/2, footage.height/2]);
+        layerMap[i] = layer;
+
+        if (sprite.blendMode && blendMap[sprite.blendMode]) {
+            layer.blendingMode = blendMap[sprite.blendMode];
+        }
         
-        // Use comp.frameDuration for precise keyframe placement
         var fd = mainComp.frameDuration;
         
-        for (var f = 0; f < sprite.frames.length; f++) {
-            var frame = sprite.frames[f];
-            var time = f * fd;
+        for (var k = 0; k < sprite.keyframes.length; k++) {
+            var kf = sprite.keyframes[k];
+            var time = kf.f * fd;
             
-            var centerX = footage.width / 2;
-            var centerY = footage.height / 2;
+            var imgW = footage ? footage.width : (kf.l.w || 100);
+            var imgH = footage ? footage.height : (kf.l.h || 100);
+            
+            var sw = (kf.l.w || 1) / (imgW || 1);
+            var sh = (kf.l.h || 1) / (imgH || 1);
+            
+            var a = kf.t ? kf.t.a : 1;
+            var b = kf.t ? kf.t.b : 0;
+            var c = kf.t ? kf.t.c : 0;
+            var d = kf.t ? kf.t.d : 1;
+            var tx = kf.t ? kf.t.tx : 0;
+            var ty = kf.t ? kf.t.ty : 0;
+
+            var Ma = a * sw;
+            var Mb = b * sw;
+            var Mc = c * sh;
+            var Md = d * sh;
+            var Mtx = a * kf.l.x + c * kf.l.y + tx;
+            var Mty = b * kf.l.x + d * kf.l.y + ty;
+
             var finalX, finalY;
+            var scaleX = 100;
+            var scaleY = 100;
+            var rot = 0;
             
             var opKey = layer.opacity.addKey(time);
-            layer.opacity.setValueAtKey(opKey, frame.a * 100);
+            layer.opacity.setValueAtKey(opKey, kf.a * 100);
             layer.opacity.setInterpolationTypeAtKey(opKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
             
-            if (frame.t) {
-                var t = frame.t;
-                finalX = t.a * centerX + t.c * centerY + t.tx + frame.l.x;
-                finalY = t.b * centerX + t.d * centerY + t.ty + frame.l.y;
-                
-                var sx = Math.sqrt(t.a * t.a + t.b * t.b);
-                var sy = Math.sqrt(t.c * t.c + t.d * t.d);
-                
-                // Calculate determinant to detect flips/mirrors
-                var det = t.a * t.d - t.b * t.c;
-                if (det < 0) {
-                    sy = -sy;
-                }
-
-                sx *= 100;
-                sy *= 100;
-                var rot = Math.atan2(t.b, t.a) * 180 / Math.PI;
-                
-                var scaleKey = layer.scale.addKey(time);
-                layer.scale.setValueAtKey(scaleKey, [sx, sy]);
-                layer.scale.setInterpolationTypeAtKey(scaleKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-                
-                var rotKey = layer.rotation.addKey(time);
-                layer.rotation.setValueAtKey(rotKey, rot);
-                layer.rotation.setInterpolationTypeAtKey(rotKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-            } else {
-                finalX = frame.l.x + centerX;
-                finalY = frame.l.y + centerY;
-                
-                var scaleX = 100;
-                var scaleY = 100;
-                // Fix for Dimensions: Use layout size if transform is missing
-                if (frame.l && frame.l.width && frame.l.height && footage.width > 0 && footage.height > 0) {
-                     scaleX = (frame.l.width / footage.width) * 100;
-                     scaleY = (frame.l.height / footage.height) * 100;
-                }
-
-                var scaleKey = layer.scale.addKey(time);
-                layer.scale.setValueAtKey(scaleKey, [scaleX, scaleY]);
-                layer.scale.setInterpolationTypeAtKey(scaleKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-                
-                var rotKey = layer.rotation.addKey(time);
-                layer.rotation.setValueAtKey(rotKey, 0);
-                layer.rotation.setInterpolationTypeAtKey(rotKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-            }
+            scaleX = Math.sqrt(Ma * Ma + Mb * Mb);
+            var det = Ma * Md - Mb * Mc;
+            scaleY = det / (scaleX || 1e-6);
+            rot = Math.atan2(Mb, Ma) * 180 / Math.PI;
+            
+            scaleX *= 100;
+            scaleY *= 100;
+            
+            finalX = Mtx;
+            finalY = Mty;
+            
+            var scaleKey = layer.scale.addKey(time);
+            layer.scale.setValueAtKey(scaleKey, [scaleX, scaleY]);
+            layer.scale.setInterpolationTypeAtKey(scaleKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+            
+            var rotKey = layer.rotation.addKey(time);
+            layer.rotation.setValueAtKey(rotKey, rot);
+            layer.rotation.setInterpolationTypeAtKey(rotKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
             
             var posKey = layer.position.addKey(time);
-            // Offset by half width/height because parent (masterNull) is at center
-            layer.position.setValueAtKey(posKey, [finalX - data.width/2, finalY - data.height/2]);
+            layer.position.setValueAtKey(posKey, [finalX, finalY]);
             layer.position.setInterpolationTypeAtKey(posKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
         }
     }
 
-    var projectFolder = assetsFolder.parent;
+    // Apply Track Mattes (Professional Duplicate Logic for multi-use mattes)
+    // We process in reverse to maintain correct stack order during duplication
+    for (var i = data.sprites.length - 1; i >= 0; i--) {
+        var s = data.sprites[i];
+        if (s.matteKey) {
+            var targetLayer = layerMap[i];
+            if (!targetLayer) continue;
+            
+            var originalMatteLayer = null;
+            // Find the sprite that acts as the matte source
+            for (var j = 0; j < data.sprites.length; j++) {
+                if (data.sprites[j].imageKey === s.matteKey) {
+                    originalMatteLayer = layerMap[j];
+                    break;
+                }
+            }
+            
+            if (originalMatteLayer) {
+                try {
+                    // Duplicate the matte layer so it can be used specifically for this target
+                    var matteInstance = originalMatteLayer.duplicate();
+                    matteInstance.name = "[MATTE]_" + originalMatteLayer.name;
+                    matteInstance.moveBefore(targetLayer);
+                    matteInstance.parent = originalMatteLayer.parent;
+                    targetLayer.trackMatteType = TrackMatteType.ALPHA;
+                    
+                    // Hide the original matte layer if it's purely a mask source
+                    // SVGA usually uses separate sprites for masks
+                    originalMatteLayer.enabled = false;
+                } catch(e) { $.writeln("Matte apply failed for layer " + i + ": " + e); }
+            }
+        }
+    }
+
     if (data.adjustments.bg.exists) {
         var bgFile = File(projectFolder.fsName + "/background.png");
         if (bgFile.exists) {
@@ -2033,55 +2568,43 @@ if (!this.JSON) { this.JSON = {}; }
         }
     }
 
-    if (data.adjustments.wm.exists) {
-        var wmFile = File(projectFolder.fsName + "/watermark.png");
-        if (wmFile.exists) {
-            var wmL = mainComp.layers.add(app.project.importFile(new ImportOptions(wmFile)));
-            wmL.name = "Quantum_Watermark";
-            wmL.moveToBeginning();
-            wmL.position.setValue([data.width/2 + data.adjustments.wm.pos.x, data.height/2 + data.adjustments.wm.pos.y]);
-            var ws = data.adjustments.wm.scale * 100;
-            wmL.scale.setValue([ws, ws]);
-        }
-    }
-
     app.endUndoGroup();
-    alert("✅ Animation Rebuild Complete!");
+    alert("✅ Animation Rebuild Complete (v7.0 ULTRA)!\\nLayers: " + data.sprites.length + "\\nCheck Info panel for any missing assets.");
 })();
       `;
 
-      const readmeContent = `SVGA to AEP Script Usage Guide (v5.7)
+      const readmeContent = `SVGA to AEP Script Usage Guide (v7.0 ULTRA)
 ================================
 
 📁 Files Included
 -----------------
 - ${metadata.name.replace('.svga','')}.jsx - After Effects script file
+- manifest.json - Animation data file (DO NOT DELETE)
 - assets/ - Exported image and audio files
 - README.txt - This file
 
 🚀 Quick Start
 --------------
-1. Open Adobe After Effects
-2. Go to File > Scripts > Run Script File
-3. Select ${metadata.name.replace('.svga','')}.jsx script file
-4. Wait for processing (progress bar will show)
-5. Composition viewer will open automatically
+1. Extract the entire ZIP file to a folder.
+2. Open Adobe After Effects.
+3. Go to File > Scripts > Run Script File.
+4. Select ${metadata.name.replace('.svga','')}.jsx script file.
+5. The script will automatically find manifest.json and assets/ in the same folder.
 
-✅ Features (v5.7 Updates)
+✅ Features (v7.0 Updates)
 --------------------------
-- Auto create AEP project
-- Import all assets (images, audio)
-- Rebuild animation keyframes (Position, Scale, Rotation, Opacity)
-- FIXED: Mirrored/Flipped layers now render correctly (Negative Scale Y)
-- FIXED: Layers with layout scaling now maintain correct dimensions
-- Background & Watermark support
+- SVGA 2.0 Engine: Built using the same high-fidelity logic as the SVGA 2.0 export button.
+- Original Version Sync: Detects and labels the project with the original SVGA version (2.0 forced).
+- Robust Layer Recovery: All layers from the original file are now included. Missing assets are replaced with guide placeholders to maintain animation structure.
+- Frame-Perfect Motion: Matches original FPS, frames, and viewBox dimensions exactly.
+- Professional Mirroring: Advanced matrix decomposition for flipped/mirrored layers.
+- Background & Audio support.
 
 ⚠️ Requirements
 ---------------
-- Adobe After Effects CC 2018 or newer
-- Allow Scripts to Write Files and Access Network (Edit > Preferences > Scripting & Expressions)
+- Adobe After Effects CC 2018 or newer.
+- Allow Scripts to Write Files and Access Network (Edit > Preferences > Scripting & Expressions).
 `;
-
 
       zip.file(`${metadata.name.replace('.svga','')}.jsx`, jsxContent);
       zip.file("README.txt", readmeContent);
@@ -3142,19 +3665,26 @@ if (!this.JSON) { this.JSON = {}; }
             if (typeof extractedFps === 'string') extractedFps = parseFloat(extractedFps);
             if (!extractedFps || extractedFps <= 0) extractedFps = 30;
 
-            setMetadata(prev => ({
-                ...prev,
+            const newMeta: FileMetadata = {
                 name: file.name,
-                videoItem: videoItem,
-                frames: videoItem.frames,
+                size: file.size,
+                type: 'SVGA',
+                dimensions: { width: videoItem.videoSize.width, height: videoItem.videoSize.height },
                 fps: extractedFps,
-                dimensions: { width: videoItem.videoSize.width, height: videoItem.videoSize.height }
-            }));
-            
-            setCurrentFrame(0);
-            // Reset custom dimensions to allow the new SVGA to dictate size, 
-            // but keep other workspace states (bg, watermark, layers, positions) intact.
-            setCustomDimensions(null);
+                frames: videoItem.frames,
+                assets: [],
+                videoItem: videoItem,
+                fileUrl: URL.createObjectURL(new Blob([arrayBuffer])),
+                originalFile: file
+            };
+
+            if (onFileReplace) {
+                onFileReplace(newMeta);
+            } else {
+                setMetadata(newMeta);
+                setCustomDimensions(null);
+                setCurrentFrame(0);
+            }
             
         }, (err: Error) => {
             console.error(err);
@@ -3201,10 +3731,11 @@ if (!this.JSON) { this.JSON = {}; }
     setExportPhase('جاري تحضير VAP 1.0.5...');
 
     try {
-        const width = metadata.dimensions?.width || 750;
-        const height = metadata.dimensions?.height || 750;
-        const fps = metadata.fps || 30;
-        const totalFrames = metadata.frames || 0;
+        const { message, imagesData } = await getProcessedSVGAData();
+        const width = message.params?.viewBoxWidth || metadata.dimensions?.width || 750;
+        const height = message.params?.viewBoxHeight || metadata.dimensions?.height || 750;
+        const fps = message.params?.fps || metadata.fps || 30;
+        const totalFrames = message.params?.frames || metadata.frames || 0;
         
         // VAP Layout Calculation (Based on user request)
         const gap = 4;
@@ -3366,15 +3897,16 @@ if (!this.JSON) { this.JSON = {}; }
             });
         };
 
-        // Load all used images
-        const uniqueKeys = new Set<string>();
-        (metadata.videoItem.sprites || []).forEach((s: any) => uniqueKeys.add(s.imageKey));
-        
+        const uniqueKeys = Object.keys(imagesData);
         for (const key of uniqueKeys) {
-            // Use getProcessedAsset to ensure tints/fills are applied
-            const processedUrl = await getProcessedAsset(key);
-            if (processedUrl) {
-                images[key] = await loadImage(processedUrl);
+            const uint8Array = imagesData[key];
+            if (uint8Array) {
+                let mimeType = 'image/png';
+                if (uint8Array[0] === 0xFF && uint8Array[1] === 0xD8) mimeType = 'image/jpeg';
+                const blob = new Blob([uint8Array], { type: mimeType });
+                const url = URL.createObjectURL(blob);
+                images[key] = await loadImage(url);
+                URL.revokeObjectURL(url);
             }
         }
 
@@ -3387,7 +3919,7 @@ if (!this.JSON) { this.JSON = {}; }
             ctx.clearRect(0, 0, videoW, videoH);
             
             // 1. Draw RGB Frame at (0,0)
-            const sprites = metadata.videoItem.sprites || [];
+            const sprites = message.sprites || [];
             
             const frameCanvas = document.createElement('canvas');
             frameCanvas.width = width;
@@ -3544,12 +4076,19 @@ if (!this.JSON) { this.JSON = {}; }
   const availableFormats = ['AE Project', 'SVGA 2.0', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP (MP4)', 'VAP 1.0.5'];
   
   const displayedFormats = useMemo(() => {
-      if (!currentUser?.allowedExportFormat) return availableFormats;
+      if (!currentUser?.allowedExportFormat) return availableFormats.filter(f => !hiddenFormats.includes(f));
       const allowed = Array.isArray(currentUser.allowedExportFormat) 
           ? currentUser.allowedExportFormat 
           : [currentUser.allowedExportFormat];
-      return availableFormats.filter(f => allowed.includes(f));
-  }, [currentUser, availableFormats]);
+      // Always show VAP (MP4) as requested
+      return availableFormats.filter(f => allowed.includes(f) && !hiddenFormats.includes(f));
+  }, [currentUser, availableFormats, hiddenFormats]);
+
+  useEffect(() => {
+      if (!displayedFormats.includes(selectedFormat) && displayedFormats.length > 0) {
+          setSelectedFormat(displayedFormats[0]);
+      }
+  }, [displayedFormats, selectedFormat]);
 
   const handleMainExport = async (formatOverride?: string | any) => {
     const currentFormat = (typeof formatOverride === 'string' && formatOverride) ? formatOverride : selectedFormat;
@@ -3966,345 +4505,612 @@ if (!this.JSON) { this.JSON = {}; }
         setExportPhase(isEdgeFadeActive ? 'جاري تطبيق الشفافية على الصور (Baking)...' : 'جاري ضغط الصور وإعادة بناء ملف SVGA...');
         
         try {
-            const root = protobuf.parse(`syntax="proto3";package com.opensource.svga;message MovieParams{float viewBoxWidth=1;float viewBoxHeight=2;int32 fps=3;int32 frames=4;}message Transform{float a=1;float b=2;float c=3;float d=4;float tx=5;float ty=6;}message Layout{float x=1;float y=2;float width=3;float height=4;}message ShapeEntity{int32 type=1;map<string,float> args=2;map<string,string> styles=3;Transform transform=4;}message FrameEntity{float alpha=1;Layout layout=2;Transform transform=3;string clipPath=4;repeated ShapeEntity shapes=5;string blendMode=6;}message AudioEntity{string audioKey=1;int32 startFrame=2;int32 endFrame=3;int32 startTime=4;int32 totalTime=5;}message MovieEntity{string version=1;MovieParams params=2;map<string, bytes> images=3;repeated SpriteEntity sprites=4;repeated AudioEntity audios=5;}message SpriteEntity{string imageKey=1;repeated FrameEntity frames=2;string matteKey=3;}`).root;
-            const MovieEntity = root.lookupType("com.opensource.svga.MovieEntity");
-            
-            const imagesData: Record<string, Uint8Array> = {};
-            const audioList: any[] = [...(metadata.videoItem.audios || [])];
-            
-            let finalSprites = (metadata.videoItem.sprites || []).filter((s: any) => !deletedKeys.has(s.imageKey)).map((s: any) => {
-                return JSON.parse(JSON.stringify(s));
-            });
-
-            // ---------------------------------------------------------
-            // STANDARD ASSET PROCESSING (With Baked Transparency)
-            // ---------------------------------------------------------
-            // Collect all unique image keys from sprites AND layerImages
-            const allImageKeys = new Set<string>();
-            (metadata.videoItem.sprites || []).forEach((s: any) => allImageKeys.add(s.imageKey));
-            Object.keys(layerImages).forEach(k => allImageKeys.add(k));
-
-            const keys = Array.from(allImageKeys);
-            for (let i = 0; i < keys.length; i++) {
-                const key = keys[i];
-                if (deletedKeys.has(key)) continue;
-                if (imagesData[key]) continue; 
-
-                let finalBase64 = "";
-                
-                // 1. Try to get processed asset (replaced)
-                if (layerImages[key]) {
-                    finalBase64 = await getProcessedAsset(key);
-                } 
-                // 2. Or get original asset
-                else if (metadata.videoItem.images[key]) {
-                    // Original asset (could be base64 or binary)
-                    // We need it as base64 for image loading
-                    const imgData = metadata.videoItem.images[key];
-                    if (typeof imgData === 'string') {
-                         finalBase64 = imgData.startsWith('data:') ? imgData : `data:image/png;base64,${imgData}`;
-                    } else if (imgData instanceof Uint8Array) {
-                         // Convert Uint8Array to base64
-                         let binary = '';
-                         const len = imgData.byteLength;
-                         for (let k = 0; k < len; k++) {
-                             binary += String.fromCharCode(imgData[k]);
-                         }
-                         finalBase64 = `data:image/png;base64,${btoa(binary)}`;
-                    }
+            if (metadata.type === 'SVGA') {
+                let buffer: ArrayBuffer;
+                if (metadata.originalFile) {
+                    buffer = await metadata.originalFile.arrayBuffer();
+                } else if (metadata.fileUrl) {
+                    const res = await fetch(metadata.fileUrl);
+                    buffer = await res.arrayBuffer();
+                } else {
+                    throw new Error("No original file available.");
                 }
 
-                if (!finalBase64) continue;
-                
-                // If we need to resize OR apply edge fade OR apply color tint, we must use a canvas
-                const hasColorTint = !!assetColors[key];
-                if (exportScale < 0.99 || isEdgeFadeActive || hasColorTint) {
-                    const img = new Image();
-                    img.src = finalBase64;
-                    await new Promise(r => img.onload = r);
-                    const canvas = document.createElement('canvas');
-                    // If resizing, use scaled dimensions. If only fading/tinting, use original.
-                    const targetScale = exportScale < 0.99 ? exportScale : 1.0;
-                    canvas.width = Math.floor(img.width * targetScale);
-                    canvas.height = Math.floor(img.height * targetScale);
-                    
-                    const ctx = canvas.getContext('2d');
-                    if (ctx) {
-                        // Apply Color Tint (Glow/Shadow)
-                        if (hasColorTint) {
-                            ctx.shadowColor = assetColors[key];
-                            ctx.shadowBlur = 2;
-                            ctx.shadowOffsetX = 0;
-                            ctx.shadowOffsetY = 0;
-                        }
+                const uint8Array = new Uint8Array(buffer);
+                const isZip = uint8Array[0] === 0x50 && uint8Array[1] === 0x4B && uint8Array[2] === 0x03 && uint8Array[3] === 0x04;
 
-                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                const root = protobuf.parse(svgaSchema).root;
+                const MovieEntity = root.lookupType("com.opensource.svga.MovieEntity");
+                
+                let message: any;
+
+                if (isZip) {
+                    const JSZip = (window as any).JSZip;
+                    if (!JSZip) throw new Error("JSZip not loaded");
+                    const zip = await JSZip.loadAsync(buffer);
+                    const binaryFile = zip.file("movie.binary");
+                    if (!binaryFile) {
+                        throw new Error("Invalid SVGA 1.0 file: movie.binary not found.");
+                    }
+                    const binaryData = await binaryFile.async("uint8array");
+                    message = MovieEntity.decode(binaryData);
+                    
+                    message.images = message.images || {};
+                    for (const filename of Object.keys(zip.files)) {
+                        if (filename.endsWith('.png') || filename.endsWith('.jpg') || filename.endsWith('.jpeg')) {
+                            const key = filename.replace(/\.(png|jpg|jpeg)$/, '');
+                            const imgData = await zip.file(filename)?.async("uint8array");
+                            if (imgData) {
+                                message.images[key] = imgData;
+                            }
+                        }
+                    }
+                } else {
+                    const inflated = pako.inflate(uint8Array);
+                    message = MovieEntity.decode(inflated);
+                }
+
+                if (message.sprites) {
+                    message.sprites = (metadata.videoItem.sprites || message.sprites).filter((s: any) => !deletedKeys.has(s.imageKey)).map((s: any) => JSON.parse(JSON.stringify(s)));
+                }
+                if (message.images) {
+                    const combinedImages = { ...message.images, ...(metadata.videoItem.images || {}) };
+                    deletedKeys.forEach(key => {
+                        delete combinedImages[key];
+                    });
+                    message.images = combinedImages;
+                }
+
+                const imagesData: Record<string, any> = message.images || {};
+                const keys = Object.keys(imagesData);
+                
+                for (let i = 0; i < keys.length; i++) {
+                    const key = keys[i];
+                    if (deletedKeys.has(key)) continue;
+
+                    let finalBase64 = "";
+                    
+                    if (layerImages[key]) {
+                        finalBase64 = await getProcessedAsset(key);
+                    } else {
+                        const imgData = imagesData[key];
+                        if (typeof imgData === 'string') {
+                            finalBase64 = imgData.startsWith('data:') ? imgData : `data:image/png;base64,${imgData}`;
+                        } else if (imgData instanceof Uint8Array) {
+                            let binary = '';
+                            const len = imgData.byteLength;
+                            for (let k = 0; k < len; k++) {
+                                binary += String.fromCharCode(imgData[k]);
+                            }
+                            finalBase64 = `data:image/png;base64,${btoa(binary)}`;
+                        }
+                    }
+
+                    if (!finalBase64) continue;
+                    
+                    const hasColorTint = !!assetColors[key];
+                    if (exportScale < 0.99 || isEdgeFadeActive || hasColorTint) {
+                        const img = new Image();
+                        img.src = finalBase64;
+                        await new Promise(r => img.onload = r);
+                        const canvas = document.createElement('canvas');
+                        const targetScale = exportScale < 0.99 ? exportScale : 1.0;
+                        canvas.width = Math.floor(img.width * targetScale);
+                        canvas.height = Math.floor(img.height * targetScale);
                         
-                        // Apply Edge Fade if active
-                        // Note: This bakes the fade into the image itself. 
-                        // Ideal for full-screen video frames. 
-                        // For moving sprites, this will fade their edges relative to the sprite, not the screen.
-                        if (isEdgeFadeActive) {
-                            applyTransparencyEffects(ctx, canvas.width, canvas.height);
-                        }
+                        const ctx = canvas.getContext('2d');
+                        if (ctx) {
+                            if (hasColorTint) {
+                                ctx.shadowColor = assetColors[key];
+                                ctx.shadowBlur = 2;
+                                ctx.shadowOffsetX = 0;
+                                ctx.shadowOffsetY = 0;
+                            }
 
-                        finalBase64 = canvas.toDataURL('image/png');
-                    }
-                }
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                            
+                            if (isEdgeFadeActive) {
+                                applyTransparencyEffects(ctx, canvas.width, canvas.height);
+                            }
 
-                const binaryString = atob(finalBase64.split(',')[1]);
-                const bytes = new Uint8Array(binaryString.length);
-                for (let j = 0; j < binaryString.length; j++) bytes[j] = binaryString.charCodeAt(j);
-                imagesData[key] = bytes;
-                
-                if (i % 10 === 0) {
-                    setProgress(Math.floor((i / keys.length) * 100));
-                    await new Promise(r => setTimeout(r, 0));
-                }
-            }
-
-            // Apply SVGA Global Transforms (Auto-Fit + User Transforms)
-            const origW = metadata.videoItem.videoSize.width;
-            const origH = metadata.videoItem.videoSize.height;
-            const scaleX = videoWidth / origW;
-            const scaleY = videoHeight / origH;
-            
-            // Enforce Aspect Fit (Contain)
-            const fitScale = Math.min(scaleX, scaleY);
-            const fitOffsetX = (videoWidth - origW * fitScale) / 2;
-            const fitOffsetY = (videoHeight - origH * fitScale) / 2;
-
-            finalSprites.forEach((sprite: any) => {
-                sprite.frames.forEach((frame: any) => {
-                    const cx = videoWidth / 2;
-                    const cy = videoHeight / 2;
-                    const totalScale = fitScale * svgaScale;
-
-                    if (frame.layout) {
-                        // 1. Apply Aspect Fit (Map original coords to new canvas size)
-                        let fx = frame.layout.x * fitScale + fitOffsetX;
-                        let fy = frame.layout.y * fitScale + fitOffsetY;
-                        let fw = frame.layout.width * fitScale;
-                        let fh = frame.layout.height * fitScale;
-
-                        // 2. Apply User Transforms (Scale/Pan relative to new center)
-                        frame.layout.x = (fx - cx) * svgaScale + cx + svgaPos.x;
-                        frame.layout.y = (fy - cy) * svgaScale + cy + svgaPos.y;
-                        frame.layout.width = fw * svgaScale;
-                        frame.layout.height = fh * svgaScale;
-                    }
-
-                    if (frame.transform) {
-                        // If layout exists, transform is usually a relative animation delta.
-                        // We just need to scale the delta.
-                        if (frame.layout) {
-                            frame.transform.tx *= totalScale;
-                            frame.transform.ty *= totalScale;
-                        } 
-                        // If NO layout (e.g. vector shapes), transform is the absolute position.
-                        // We need to apply the full fit + center logic.
-                        else {
-                             let ftx = frame.transform.tx * fitScale + fitOffsetX;
-                             let fty = frame.transform.ty * fitScale + fitOffsetY;
-                             
-                             frame.transform.tx = (ftx - cx) * svgaScale + cx + svgaPos.x;
-                             frame.transform.ty = (fty - cy) * svgaScale + cy + svgaPos.y;
-                             
-                             // Also scale the matrix scaling factors
-                             frame.transform.a *= totalScale;
-                             frame.transform.b *= totalScale;
-                             frame.transform.c *= totalScale;
-                             frame.transform.d *= totalScale;
+                            finalBase64 = canvas.toDataURL('image/png');
                         }
                     }
-                });
-            });
 
-            // ---------------------------------------------------------
-            // COMMON: WATERMARK & CUSTOM LAYERS
-            // ---------------------------------------------------------
-            
-            // 3. Custom Layers
-            // Back Layers (Prepend to be behind)
-            // Reverse to maintain visual order when unshifting (last added back layer should be closest to content)
-            const backLayers = customLayers.filter(l => l.zIndexMode === 'back').reverse();
-            
-            for (const layer of backLayers) {
-                try {
-                    const layerKey = layer.id;
-                    let bytes: Uint8Array | null = null;
-
-                    if (layer.url.startsWith('blob:')) {
-                        const response = await fetch(layer.url);
-                        const arrayBuffer = await response.arrayBuffer();
-                        bytes = new Uint8Array(arrayBuffer);
-                    } else if (layer.url.includes(',')) {
-                        const binary = atob(layer.url.split(',')[1]);
-                        bytes = new Uint8Array(binary.length);
-                        for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-                    }
-
-                    if (!bytes) continue;
-                    imagesData[layerKey] = bytes;
-
-                    const finalWidth = layer.width * layer.scale;
-                    const finalHeight = layer.height * layer.scale;
-                    const layerFrame = {
-                        alpha: 1.0,
-                        layout: { 
-                            x: parseFloat(layer.x.toString()), 
-                            y: parseFloat(layer.y.toString()), 
-                            width: parseFloat(finalWidth.toString()), 
-                            height: parseFloat(finalHeight.toString()) 
-                        },
-                        transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
-                    };
-                    finalSprites.unshift({ imageKey: layerKey, frames: Array(metadata.frames || 1).fill(layerFrame) });
-                } catch (e) {
-                    console.error("Failed to process back layer:", layer.id, e);
-                }
-            }
-
-            // Front Layers (Append to be on top)
-            const frontLayers = customLayers.filter(l => l.zIndexMode === 'front');
-            for (const layer of frontLayers) {
-                try {
-                    const layerKey = layer.id;
-                    let bytes: Uint8Array | null = null;
-
-                    if (layer.url.startsWith('blob:')) {
-                        const response = await fetch(layer.url);
-                        const arrayBuffer = await response.arrayBuffer();
-                        bytes = new Uint8Array(arrayBuffer);
-                    } else if (layer.url.includes(',')) {
-                        const binary = atob(layer.url.split(',')[1]);
-                        bytes = new Uint8Array(binary.length);
-                        for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-                    }
-
-                    if (!bytes) continue;
-                    imagesData[layerKey] = bytes;
-
-                    const finalWidth = layer.width * layer.scale;
-                    const finalHeight = layer.height * layer.scale;
-                    const layerFrame = {
-                        alpha: 1.0,
-                        layout: { 
-                            x: parseFloat(layer.x.toString()), 
-                            y: parseFloat(layer.y.toString()), 
-                            width: parseFloat(finalWidth.toString()), 
-                            height: parseFloat(finalHeight.toString()) 
-                        },
-                        transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
-                    };
-                    finalSprites.push({ imageKey: layerKey, frames: Array(metadata.frames || 1).fill(layerFrame) });
-                } catch (e) {
-                    console.error("Failed to process front layer:", layer.id, e);
-                }
-            }
-
-            // 2. Watermark (Should be on TOP of everything)
-            const wmKey = "quantum_wm_layer_fixed";
-            if (watermark) {
-                const binary = atob(watermark.split(',')[1]);
-                const bytes = new Uint8Array(binary.length);
-                for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
-                imagesData[wmKey] = bytes;
-
-                const wmSize = await getImageSize(watermark);
-                const wmWidth = videoWidth * wmScale;
-                const wmHeight = wmWidth * (wmSize.h / wmSize.w);
-                const wmX = (videoWidth / 2) - (wmWidth / 2) + wmPos.x;
-                const wmY = (videoHeight / 2) - (wmHeight / 2) + wmPos.y;
-                
-                const wmFrame = {
-                    alpha: 1.0,
-                    layout: { x: wmX || 0, y: wmY || 0, width: wmWidth, height: wmHeight },
-                    transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
-                };
-                finalSprites.push({
-                    imageKey: wmKey,
-                    frames: Array(metadata.frames || 1).fill(wmFrame)
-                });
-            }
-
-            // ---------------------------------------------------------
-            // AUDIO HANDLING
-            // ---------------------------------------------------------
-            if (audioUrl) {
-                const audioKey = "quantum_audio_track";
-                let bytes: Uint8Array | null = null;
-                
-                // If user uploaded a new audio file, use it
-                if (audioFile) {
-                    const arrayBuffer = await audioFile.arrayBuffer();
-                    bytes = new Uint8Array(arrayBuffer);
-                } 
-                // If it's the original audio from SVGA/MP4 and hasn't been changed
-                else if (audioUrl === originalAudioUrl) {
-                     // If it's in the original imagesData (extracted from SVGA), we might need to find its key
-                     // But here we are rebuilding. If originalAudioUrl is set, we might have extracted it.
-                     // If we want to KEEP original audio without re-encoding, we should ensure it's in imagesData.
-                     // However, for MP4 uploads, audioUrl is a blob URL.
-                     try {
-                        const response = await fetch(audioUrl);
-                        const arrayBuffer = await response.arrayBuffer();
-                        bytes = new Uint8Array(arrayBuffer);
-                     } catch (e) { console.error("Failed to fetch audio blob", e); }
-                }
-                // If it's a new audio URL (e.g. from video)
-                else {
-                    try {
-                        const response = await fetch(audioUrl);
-                        const arrayBuffer = await response.arrayBuffer();
-                        bytes = new Uint8Array(arrayBuffer);
-                    } catch (e) { console.error("Failed to fetch audio", e); }
-                }
-
-                if (bytes) {
-                    imagesData[audioKey] = bytes; 
-                    // Remove existing audios if we are replacing
-                    // Or append? Usually one audio track is preferred.
-                    // Let's replace to be safe if we are "setting" audio.
-                    // But if we want to preserve original audios and just ADD, we should check.
-                    // For now, let's assume we replace if audioUrl is active.
+                    const binaryString = atob(finalBase64.split(',')[1]);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let j = 0; j < binaryString.length; j++) bytes[j] = binaryString.charCodeAt(j);
+                    imagesData[key] = bytes;
                     
-                    // Clear existing audios list if we are providing a main track
-                    audioList.length = 0; 
-                    audioList.push({
-                        audioKey: audioKey,
-                        startFrame: 0,
-                        endFrame: metadata.frames || 0,
-                        startTime: 0,
-                        totalTime: Math.floor(((metadata.frames || 0) / (metadata.fps || 30)) * 1000)
+                    if (i % 10 === 0) {
+                        setProgress(Math.floor((i / keys.length) * 100));
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+                
+                message.images = imagesData;
+
+                const origW = message.params.viewBoxWidth;
+                const origH = message.params.viewBoxHeight;
+                const scaleX = videoWidth / origW;
+                const scaleY = videoHeight / origH;
+                
+                const fitScale = Math.min(scaleX, scaleY);
+                const fitOffsetX = (videoWidth - origW * fitScale) / 2;
+                const fitOffsetY = (videoHeight - origH * fitScale) / 2;
+
+                if (message.sprites) {
+                    message.sprites.forEach((sprite: any) => {
+                        if (sprite.frames) {
+                            sprite.frames.forEach((frame: any) => {
+                                const cx = videoWidth / 2;
+                                const cy = videoHeight / 2;
+                                const totalScale = fitScale * svgaScale;
+
+                                if (frame.layout) {
+                                    let fx = frame.layout.x * fitScale + fitOffsetX;
+                                    let fy = frame.layout.y * fitScale + fitOffsetY;
+                                    let fw = frame.layout.width * fitScale;
+                                    let fh = frame.layout.height * fitScale;
+
+                                    frame.layout.x = (fx - cx) * svgaScale + cx + svgaPos.x;
+                                    frame.layout.y = (fy - cy) * svgaScale + cy + svgaPos.y;
+                                    frame.layout.width = fw * svgaScale;
+                                    frame.layout.height = fh * svgaScale;
+                                }
+
+                                if (frame.transform) {
+                                    if (frame.layout) {
+                                        frame.transform.tx *= totalScale;
+                                        frame.transform.ty *= totalScale;
+                                    } else {
+                                         let ftx = frame.transform.tx * fitScale + fitOffsetX;
+                                         let fty = frame.transform.ty * fitScale + fitOffsetY;
+                                         
+                                         frame.transform.tx = (ftx - cx) * svgaScale + cx + svgaPos.x;
+                                         frame.transform.ty = (fty - cy) * svgaScale + cy + svgaPos.y;
+                                         
+                                         frame.transform.a *= totalScale;
+                                         frame.transform.b *= totalScale;
+                                         frame.transform.c *= totalScale;
+                                         frame.transform.d *= totalScale;
+                                    }
+                                }
+                            });
+                        }
                     });
                 }
+
+                message.params.viewBoxWidth = videoWidth;
+                message.params.viewBoxHeight = videoHeight;
+
+                const backLayers = customLayers.filter(l => l.zIndexMode === 'back').reverse();
+                for (const layer of backLayers) {
+                    try {
+                        const layerKey = layer.id;
+                        let bytes: Uint8Array | null = null;
+
+                        if (layer.url.startsWith('blob:')) {
+                            const response = await fetch(layer.url);
+                            const arrayBuffer = await response.arrayBuffer();
+                            bytes = new Uint8Array(arrayBuffer);
+                        } else if (layer.url.includes(',')) {
+                            const binary = atob(layer.url.split(',')[1]);
+                            bytes = new Uint8Array(binary.length);
+                            for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                        }
+
+                        if (!bytes) continue;
+                        message.images[layerKey] = bytes;
+
+                        const finalWidth = layer.width * layer.scale;
+                        const finalHeight = layer.height * layer.scale;
+                        const layerFrame = {
+                            alpha: 1.0,
+                            layout: { 
+                                x: parseFloat(layer.x.toString()), 
+                                y: parseFloat(layer.y.toString()), 
+                                width: parseFloat(finalWidth.toString()), 
+                                height: parseFloat(finalHeight.toString()) 
+                            },
+                            transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+                        };
+                        if (!message.sprites) message.sprites = [];
+                        message.sprites.unshift({ imageKey: layerKey, frames: Array(message.params.frames || 1).fill(layerFrame) });
+                    } catch (e) {
+                        console.error("Failed to process back layer:", layer.id, e);
+                    }
+                }
+
+                const frontLayers = customLayers.filter(l => l.zIndexMode === 'front');
+                for (const layer of frontLayers) {
+                    try {
+                        const layerKey = layer.id;
+                        let bytes: Uint8Array | null = null;
+
+                        if (layer.url.startsWith('blob:')) {
+                            const response = await fetch(layer.url);
+                            const arrayBuffer = await response.arrayBuffer();
+                            bytes = new Uint8Array(arrayBuffer);
+                        } else if (layer.url.includes(',')) {
+                            const binary = atob(layer.url.split(',')[1]);
+                            bytes = new Uint8Array(binary.length);
+                            for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                        }
+
+                        if (!bytes) continue;
+                        message.images[layerKey] = bytes;
+
+                        const finalWidth = layer.width * layer.scale;
+                        const finalHeight = layer.height * layer.scale;
+                        const layerFrame = {
+                            alpha: 1.0,
+                            layout: { 
+                                x: parseFloat(layer.x.toString()), 
+                                y: parseFloat(layer.y.toString()), 
+                                width: parseFloat(finalWidth.toString()), 
+                                height: parseFloat(finalHeight.toString()) 
+                            },
+                            transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+                        };
+                        if (!message.sprites) message.sprites = [];
+                        message.sprites.push({ imageKey: layerKey, frames: Array(message.params.frames || 1).fill(layerFrame) });
+                    } catch (e) {
+                        console.error("Failed to process front layer:", layer.id, e);
+                    }
+                }
+
+                const wmKey = "quantum_wm_layer_fixed";
+                if (watermark) {
+                    const binary = atob(watermark.split(',')[1]);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                    message.images[wmKey] = bytes;
+
+                    const wmSize = await getImageSize(watermark);
+                    const wmWidth = videoWidth * wmScale;
+                    const wmHeight = wmWidth * (wmSize.h / wmSize.w);
+                    const wmX = (videoWidth / 2) - (wmWidth / 2) + wmPos.x;
+                    const wmY = (videoHeight / 2) - (wmHeight / 2) + wmPos.y;
+                    
+                    const wmFrame = {
+                        alpha: 1.0,
+                        layout: { x: wmX || 0, y: wmY || 0, width: wmWidth, height: wmHeight },
+                        transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+                    };
+                    if (!message.sprites) message.sprites = [];
+                    message.sprites.push({
+                        imageKey: wmKey,
+                        frames: Array(message.params.frames || 1).fill(wmFrame)
+                    });
+                }
+
+                if (audioUrl) {
+                    const audioKey = "quantum_audio_track";
+                    let bytes: Uint8Array | null = null;
+                    
+                    if (audioFile) {
+                        const arrayBuffer = await audioFile.arrayBuffer();
+                        bytes = new Uint8Array(arrayBuffer);
+                    } else if (audioUrl === originalAudioUrl) {
+                         bytes = null;
+                    } else {
+                        try {
+                            const response = await fetch(audioUrl);
+                            const arrayBuffer = await response.arrayBuffer();
+                            bytes = new Uint8Array(arrayBuffer);
+                        } catch (e) { console.error("Failed to fetch audio", e); }
+                    }
+
+                    if (bytes) {
+                        message.images[audioKey] = bytes; 
+                        message.audios = [{
+                            audioKey: audioKey,
+                            startFrame: 0,
+                            endFrame: message.params.frames || 0,
+                            startTime: 0,
+                            totalTime: Math.floor(((message.params.frames || 0) / (message.params.fps || 30)) * 1000)
+                        }];
+                    }
+                } else {
+                    message.audios = [];
+                }
+
+                const bufferOut = MovieEntity.encode(message).finish();
+                const compressedBuffer = pako.deflate(bufferOut);
+                
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(new Blob([compressedBuffer]));
+                link.download = `${metadata.name.replace('.svga','')}_Quantum_${Math.round(exportScale*100)}.svga`;
+                link.click();
+                setProgress(100);
+            } else {
+                const root = protobuf.parse(svgaSchema).root;
+                const MovieEntity = root.lookupType("com.opensource.svga.MovieEntity");
+                
+                const imagesData: Record<string, any> = {};
+                const audioList: any[] = [...(metadata.videoItem.audios || [])];
+                
+                let finalSprites = (metadata.videoItem.sprites || []).filter((s: any) => !deletedKeys.has(s.imageKey)).map((s: any) => {
+                    return JSON.parse(JSON.stringify(s));
+                });
+
+                const allImageKeys = new Set<string>();
+                (metadata.videoItem.sprites || []).forEach((s: any) => allImageKeys.add(s.imageKey));
+                Object.keys(layerImages).forEach(k => allImageKeys.add(k));
+
+                const keys = Array.from(allImageKeys);
+                for (let i = 0; i < keys.length; i++) {
+                    const key = keys[i];
+                    if (deletedKeys.has(key)) continue;
+                    if (imagesData[key]) continue; 
+
+                    let finalBase64 = "";
+                    
+                    if (layerImages[key]) {
+                        finalBase64 = await getProcessedAsset(key);
+                    } 
+                    else if (metadata.videoItem.images[key]) {
+                        const imgData = metadata.videoItem.images[key];
+                        if (typeof imgData === 'string') {
+                             finalBase64 = imgData.startsWith('data:') ? imgData : `data:image/png;base64,${imgData}`;
+                        } else if (imgData instanceof Uint8Array) {
+                             let binary = '';
+                             const len = imgData.byteLength;
+                             for (let k = 0; k < len; k++) {
+                                 binary += String.fromCharCode(imgData[k]);
+                             }
+                             finalBase64 = `data:image/png;base64,${btoa(binary)}`;
+                        }
+                    }
+
+                    if (!finalBase64) continue;
+                    
+                    const hasColorTint = !!assetColors[key];
+                    if (exportScale < 0.99 || isEdgeFadeActive || hasColorTint) {
+                        const img = new Image();
+                        img.src = finalBase64;
+                        await new Promise(r => img.onload = r);
+                        const canvas = document.createElement('canvas');
+                        const targetScale = exportScale < 0.99 ? exportScale : 1.0;
+                        canvas.width = Math.floor(img.width * targetScale);
+                        canvas.height = Math.floor(img.height * targetScale);
+                        
+                        const ctx = canvas.getContext('2d');
+                        if (ctx) {
+                            if (hasColorTint) {
+                                ctx.shadowColor = assetColors[key];
+                                ctx.shadowBlur = 2;
+                                ctx.shadowOffsetX = 0;
+                                ctx.shadowOffsetY = 0;
+                            }
+
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                            
+                            if (isEdgeFadeActive) {
+                                applyTransparencyEffects(ctx, canvas.width, canvas.height);
+                            }
+
+                            finalBase64 = canvas.toDataURL('image/png');
+                        }
+                    }
+
+                    const binaryString = atob(finalBase64.split(',')[1]);
+                    const bytes = new Uint8Array(binaryString.length);
+                    for (let j = 0; j < binaryString.length; j++) bytes[j] = binaryString.charCodeAt(j);
+                    imagesData[key] = bytes;
+                    
+                    if (i % 10 === 0) {
+                        setProgress(Math.floor((i / keys.length) * 100));
+                        await new Promise(r => setTimeout(r, 0));
+                    }
+                }
+
+                const origW = metadata.videoItem.videoSize.width;
+                const origH = metadata.videoItem.videoSize.height;
+                const scaleX = videoWidth / origW;
+                const scaleY = videoHeight / origH;
+                
+                const fitScale = Math.min(scaleX, scaleY);
+                const fitOffsetX = (videoWidth - origW * fitScale) / 2;
+                const fitOffsetY = (videoHeight - origH * fitScale) / 2;
+
+                finalSprites.forEach((sprite: any) => {
+                    sprite.frames.forEach((frame: any) => {
+                        const cx = videoWidth / 2;
+                        const cy = videoHeight / 2;
+                        const totalScale = fitScale * svgaScale;
+
+                        if (frame.layout) {
+                            let fx = frame.layout.x * fitScale + fitOffsetX;
+                            let fy = frame.layout.y * fitScale + fitOffsetY;
+                            let fw = frame.layout.width * fitScale;
+                            let fh = frame.layout.height * fitScale;
+
+                            frame.layout.x = (fx - cx) * svgaScale + cx + svgaPos.x;
+                            frame.layout.y = (fy - cy) * svgaScale + cy + svgaPos.y;
+                            frame.layout.width = fw * svgaScale;
+                            frame.layout.height = fh * svgaScale;
+                        }
+
+                        if (frame.transform) {
+                            if (frame.layout) {
+                                frame.transform.tx *= totalScale;
+                                frame.transform.ty *= totalScale;
+                            } 
+                            else {
+                                 let ftx = frame.transform.tx * fitScale + fitOffsetX;
+                                 let fty = frame.transform.ty * fitScale + fitOffsetY;
+                                 
+                                 frame.transform.tx = (ftx - cx) * svgaScale + cx + svgaPos.x;
+                                 frame.transform.ty = (fty - cy) * svgaScale + cy + svgaPos.y;
+                                 
+                                 frame.transform.a *= totalScale;
+                                 frame.transform.b *= totalScale;
+                                 frame.transform.c *= totalScale;
+                                 frame.transform.d *= totalScale;
+                            }
+                        }
+                    });
+                });
+
+                const backLayers = customLayers.filter(l => l.zIndexMode === 'back').reverse();
+                
+                for (const layer of backLayers) {
+                    try {
+                        const layerKey = layer.id;
+                        let bytes: Uint8Array | null = null;
+
+                        if (layer.url.startsWith('blob:')) {
+                            const response = await fetch(layer.url);
+                            const arrayBuffer = await response.arrayBuffer();
+                            bytes = new Uint8Array(arrayBuffer);
+                        } else if (layer.url.includes(',')) {
+                            const binary = atob(layer.url.split(',')[1]);
+                            bytes = new Uint8Array(binary.length);
+                            for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                        }
+
+                        if (!bytes) continue;
+                        imagesData[layerKey] = bytes;
+
+                        const finalWidth = layer.width * layer.scale;
+                        const finalHeight = layer.height * layer.scale;
+                        const layerFrame = {
+                            alpha: 1.0,
+                            layout: { 
+                                x: parseFloat(layer.x.toString()), 
+                                y: parseFloat(layer.y.toString()), 
+                                width: parseFloat(finalWidth.toString()), 
+                                height: parseFloat(finalHeight.toString()) 
+                            },
+                            transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+                        };
+                        finalSprites.unshift({ imageKey: layerKey, frames: Array(metadata.frames || 1).fill(layerFrame) });
+                    } catch (e) {
+                        console.error("Failed to process back layer:", layer.id, e);
+                    }
+                }
+
+                const frontLayers = customLayers.filter(l => l.zIndexMode === 'front');
+                for (const layer of frontLayers) {
+                    try {
+                        const layerKey = layer.id;
+                        let bytes: Uint8Array | null = null;
+
+                        if (layer.url.startsWith('blob:')) {
+                            const response = await fetch(layer.url);
+                            const arrayBuffer = await response.arrayBuffer();
+                            bytes = new Uint8Array(arrayBuffer);
+                        } else if (layer.url.includes(',')) {
+                            const binary = atob(layer.url.split(',')[1]);
+                            bytes = new Uint8Array(binary.length);
+                            for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                        }
+
+                        if (!bytes) continue;
+                        imagesData[layerKey] = bytes;
+
+                        const finalWidth = layer.width * layer.scale;
+                        const finalHeight = layer.height * layer.scale;
+                        const layerFrame = {
+                            alpha: 1.0,
+                            layout: { 
+                                x: parseFloat(layer.x.toString()), 
+                                y: parseFloat(layer.y.toString()), 
+                                width: parseFloat(finalWidth.toString()), 
+                                height: parseFloat(finalHeight.toString()) 
+                            },
+                            transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+                        };
+                        finalSprites.push({ imageKey: layerKey, frames: Array(metadata.frames || 1).fill(layerFrame) });
+                    } catch (e) {
+                        console.error("Failed to process front layer:", layer.id, e);
+                    }
+                }
+
+                const wmKey = "quantum_wm_layer_fixed";
+                if (watermark) {
+                    const binary = atob(watermark.split(',')[1]);
+                    const bytes = new Uint8Array(binary.length);
+                    for (let j = 0; j < binary.length; j++) bytes[j] = binary.charCodeAt(j);
+                    imagesData[wmKey] = bytes;
+
+                    const wmSize = await getImageSize(watermark);
+                    const wmWidth = videoWidth * wmScale;
+                    const wmHeight = wmWidth * (wmSize.h / wmSize.w);
+                    const wmX = (videoWidth / 2) - (wmWidth / 2) + wmPos.x;
+                    const wmY = (videoHeight / 2) - (wmHeight / 2) + wmPos.y;
+                    
+                    const wmFrame = {
+                        alpha: 1.0,
+                        layout: { x: wmX || 0, y: wmY || 0, width: wmWidth, height: wmHeight },
+                        transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }
+                    };
+                    finalSprites.push({
+                        imageKey: wmKey,
+                        frames: Array(metadata.frames || 1).fill(wmFrame)
+                    });
+                }
+
+                if (audioUrl) {
+                    const audioKey = "quantum_audio_track";
+                    let bytes: Uint8Array | null = null;
+                    
+                    if (audioFile) {
+                        const arrayBuffer = await audioFile.arrayBuffer();
+                        bytes = new Uint8Array(arrayBuffer);
+                    } 
+                    else if (audioUrl === originalAudioUrl) {
+                         try {
+                            const response = await fetch(audioUrl);
+                            const arrayBuffer = await response.arrayBuffer();
+                            bytes = new Uint8Array(arrayBuffer);
+                         } catch (e) { console.error("Failed to fetch audio blob", e); }
+                    }
+                    else {
+                        try {
+                            const response = await fetch(audioUrl);
+                            const arrayBuffer = await response.arrayBuffer();
+                            bytes = new Uint8Array(arrayBuffer);
+                        } catch (e) { console.error("Failed to fetch audio", e); }
+                    }
+
+                    if (bytes) {
+                        imagesData[audioKey] = bytes; 
+                        audioList.length = 0; 
+                        audioList.push({
+                            audioKey: audioKey,
+                            startFrame: 0,
+                            endFrame: metadata.frames || 0,
+                            startTime: 0,
+                            totalTime: Math.floor(((metadata.frames || 0) / (metadata.fps || 30)) * 1000)
+                        });
+                    }
+                }
+
+                const payload = { 
+                    version: "2.0", 
+                    params: { 
+                        viewBoxWidth: videoWidth, 
+                        viewBoxHeight: videoHeight, 
+                        fps: metadata.fps || 30, 
+                        frames: metadata.frames || 0 
+                    }, 
+                    images: imagesData, 
+                    sprites: finalSprites,
+                    audios: audioList
+                };
+
+                const buffer = MovieEntity.encode(MovieEntity.create(payload)).finish();
+                const compressedBuffer = pako.deflate(buffer);
+                
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(new Blob([compressedBuffer]));
+                link.download = `${metadata.name.replace('.svga','')}_Quantum_${Math.round(exportScale*100)}.svga`;
+                link.click();
+                setProgress(100);
             }
-
-            // ---------------------------------------------------------
-            // CONSTRUCT PAYLOAD
-            // ---------------------------------------------------------
-            const payload = { 
-                version: "2.0", 
-                params: { 
-                    viewBoxWidth: videoWidth, 
-                    viewBoxHeight: videoHeight, 
-                    fps: metadata.fps || 30, 
-                    frames: metadata.frames || 0 
-                }, 
-                images: imagesData, 
-                sprites: finalSprites,
-                audios: audioList
-            };
-
-            const buffer = MovieEntity.encode(MovieEntity.create(payload)).finish();
-            const compressedBuffer = pako.deflate(buffer);
-            
-            const link = document.createElement("a");
-            link.href = URL.createObjectURL(new Blob([compressedBuffer]));
-            link.download = `${metadata.name.replace('.svga','')}_Quantum_${Math.round(exportScale*100)}.svga`;
-            link.click();
-            setProgress(100);
         } catch (e) {
             console.error(e);
             alert("فشل التصدير: " + (e as any).message);
@@ -4511,6 +5317,9 @@ if (!this.JSON) { this.JSON = {}; }
               <button onClick={() => setActiveSideTab('transforms')} className={`flex-1 py-3 rounded-2xl text-[9px] font-black uppercase transition-all ${activeSideTab === 'transforms' ? 'bg-sky-500 text-white shadow-glow-sky' : 'text-slate-500'}`}>التحويلات</button>
               <button onClick={() => setActiveSideTab('bg')} className={`flex-1 py-3 rounded-2xl text-[9px] font-black uppercase transition-all ${activeSideTab === 'bg' ? 'bg-sky-500 text-white shadow-glow-sky' : 'text-slate-500'}`}>الخلفية</button>
               <button onClick={() => setActiveSideTab('optimize')} className={`flex-1 py-3 rounded-2xl text-[9px] font-black uppercase transition-all ${activeSideTab === 'optimize' ? 'bg-emerald-500 text-white shadow-glow-emerald' : 'text-slate-500'}`}>ضغط الحجم</button>
+              {currentUser?.role === 'admin' && (
+                <button onClick={() => setActiveSideTab('settings')} className={`flex-1 py-3 rounded-2xl text-[9px] font-black uppercase transition-all ${activeSideTab === 'settings' ? 'bg-purple-500 text-white shadow-glow-purple' : 'text-slate-500'}`}>الإعدادات</button>
+              )}
           </div>
 
           <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-950/80 rounded-[3rem] p-6 border border-white/5 shadow-3xl">
@@ -4613,6 +5422,45 @@ if (!this.JSON) { this.JSON = {}; }
                 </div>
               )}
 
+              {activeSideTab === 'settings' && currentUser?.role === 'admin' && (
+                <div className="space-y-8 animate-in slide-in-from-right-4 duration-300">
+                    <div className="space-y-6">
+                        <h4 className="text-white font-black text-xs uppercase tracking-widest text-purple-400">إدارة صيغ التصدير (Control Panel)</h4>
+                        <p className="text-[10px] text-slate-400 font-bold leading-relaxed">
+                            تحكم في الصيغ التي تظهر للمستخدم في قائمة التصدير. الصيغ المحددة هنا سيتم إخفاؤها.
+                        </p>
+                        
+                        <div className="grid grid-cols-1 gap-3">
+                            {availableFormats.map(format => (
+                                <div 
+                                    key={format} 
+                                    onClick={() => {
+                                        setHiddenFormats(prev => 
+                                            prev.includes(format) 
+                                                ? prev.filter(f => f !== format) 
+                                                : [...prev, format]
+                                        );
+                                    }}
+                                    className={`flex items-center justify-between p-4 rounded-2xl border transition-all cursor-pointer ${hiddenFormats.includes(format) ? 'bg-red-500/10 border-red-500/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center transition-all ${hiddenFormats.includes(format) ? 'border-red-500 bg-red-500' : 'border-slate-600'}`}>
+                                            {hiddenFormats.includes(format) && (
+                                                <svg className="w-2.5 h-2.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={4} d="M5 13l4 4L19 7" /></svg>
+                                            )}
+                                        </div>
+                                        <span className={`text-xs font-black uppercase ${hiddenFormats.includes(format) ? 'text-red-400' : 'text-white'}`}>{format}</span>
+                                    </div>
+                                    <span className={`text-[9px] font-bold uppercase ${hiddenFormats.includes(format) ? 'text-red-500/70' : 'text-slate-500'}`}>
+                                        {hiddenFormats.includes(format) ? 'مخفي' : 'ظاهر'}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+              )}
+
               {activeSideTab === 'transforms' && (
                 <div className="space-y-10 animate-in slide-in-from-right-4 duration-300">
                     <div className="space-y-6 pb-6 border-b border-white/5">
@@ -4672,7 +5520,7 @@ if (!this.JSON) { this.JSON = {}; }
                                                <div className="flex justify-between items-center mb-4">
                                                    <h5 className="text-[11px] font-black text-white uppercase tracking-wider">تحريك (Move)</h5>
                                                    <div className="flex bg-slate-900 rounded-lg p-0.5 border border-white/10">
-                                                       {[10, 50, 100].map(step => (
+                                                       {[1, 5, 10, 50, 100].map(step => (
                                                            <button 
                                                                key={step}
                                                                onClick={() => setMoveStep(step)}
@@ -4900,12 +5748,14 @@ if (!this.JSON) { this.JSON = {}; }
                                </button>
                            )}
                        </div>
+                       {displayedFormats.includes('VAP (MP4)') && (
                        <div className="flex gap-2">
                            <button onClick={() => { setSelectedFormat('VAP (MP4)'); handleMainExport('VAP (MP4)'); }} className="flex-1 py-4 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-2xl text-[10px] font-black uppercase hover:bg-indigo-500/30 transition-all">تصدير VAP (flutter_vap_plus)</button>
                            <button onClick={() => setShowVapHelp(true)} className="w-12 flex items-center justify-center bg-white/5 border border-white/5 rounded-2xl text-white hover:bg-white/10 transition-all">
                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                            </button>
                        </div>
+                       )}
                        <button onClick={() => videoInputRef.current?.click()} className="py-4 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-2xl text-[10px] font-black uppercase">استيراد ملف (فيديو/GIF/WebP)</button>
                        <button onClick={() => setShowRecordingModal(true)} className="col-span-2 py-4 bg-red-500/20 text-red-400 border border-red-500/30 rounded-2xl text-[10px] font-black uppercase flex items-center justify-center gap-2">
                           <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
@@ -5420,40 +6270,17 @@ class _MyAppState extends State<MyApp> {
                         </div>
                     </div>
 
-              {/* VAP 1.0.5 Special Button - Always visible but locked if no permission */}
-              <button 
-                onClick={() => {
-                    if (!currentUser) {
-                        onLoginRequired();
-                        return;
-                    }
-                    
-                    const hasActiveSubscription = currentUser.subscriptionType && currentUser.subscriptionType !== 'none';
-                    const hasSpecificPermission = currentUser.allowedExportFormat && (
-                        Array.isArray(currentUser.allowedExportFormat) 
-                            ? currentUser.allowedExportFormat.includes('VAP 1.0.5') 
-                            : currentUser.allowedExportFormat === 'VAP 1.0.5'
-                    );
-                    
-                    const isAllowed = hasActiveSubscription || hasSpecificPermission;
-                    
-                    if (isAllowed) {
-                        handleVAP105Export(false);
-                    } else {
-                        onSubscriptionRequired();
-                    }
-                }}
-                className={`w-full py-4 mb-4 text-[11px] font-black rounded-xl shadow-glow-purple active:scale-95 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] ${
-                    ((currentUser?.subscriptionType && currentUser.subscriptionType !== 'none') || (currentUser?.allowedExportFormat && (Array.isArray(currentUser.allowedExportFormat) ? currentUser.allowedExportFormat.includes('VAP 1.0.5') : currentUser.allowedExportFormat === 'VAP 1.0.5')))
-                    ? 'bg-purple-600 hover:bg-purple-500 text-white'
-                    : 'bg-slate-800 text-slate-400 opacity-75'
-                }`}
-             >
-                {!((currentUser?.subscriptionType && currentUser.subscriptionType !== 'none') || (currentUser?.allowedExportFormat && (Array.isArray(currentUser.allowedExportFormat) ? currentUser.allowedExportFormat.includes('VAP 1.0.5') : currentUser.allowedExportFormat === 'VAP 1.0.5'))) && <span className="text-xs">🔒</span>}
-                🚀 تصدير VAP 1.0.5 (خاص)
-             </button>
+              {/* VAP 1.0.5 Special Button - Only visible if allowed */}
+              {displayedFormats.includes('VAP 1.0.5') && (
+                  <button 
+                    onClick={() => handleVAP105Export(false)}
+                    className="w-full py-4 mb-4 text-[11px] font-black rounded-xl shadow-glow-purple active:scale-95 flex items-center justify-center gap-2 transition-all hover:scale-[1.02] bg-purple-600 hover:bg-purple-500 text-white"
+                 >
+                    🚀 تصدير VAP 1.0.5 (خاص)
+                 </button>
+              )}
              <div className="flex flex-wrap gap-2">
-                {displayedFormats.map(f => (
+                {displayedFormats.filter(f => f !== 'VAP 1.0.5').map(f => (
                   <button key={f} onClick={() => setSelectedFormat(f)} className={`flex-1 py-3 px-2 rounded-xl text-[9px] font-black border transition-all whitespace-nowrap ${selectedFormat === f ? 'bg-sky-500 text-white border-sky-400' : 'bg-slate-950/40 text-slate-300'}`}>{f}</button>
                 ))}
              </div>

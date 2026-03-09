@@ -1,6 +1,6 @@
 import React from 'react';
 import { UserRecord, AppSettings } from '../types';
-import { LogOut, Settings, ShoppingBag, Image, Video, Layers, Wand2, BadgeCheck } from 'lucide-react';
+import { LogOut, Settings, ShoppingBag, Image, Video, Layers, Wand2, BadgeCheck, Maximize } from 'lucide-react';
 
 interface HeaderProps {
   onLogoClick: () => void;
@@ -15,6 +15,7 @@ interface HeaderProps {
   onConverterOpen: () => void;
   onImageConverterOpen: () => void;
   onImageEditorOpen: () => void;
+  onImageMatcherOpen: () => void;
   onLoginClick: () => void;
   onProfileClick: () => void;
   currentTab: string;
@@ -33,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
   onConverterOpen,
   onImageConverterOpen,
   onImageEditorOpen,
+  onImageMatcherOpen,
   onLoginClick,
   onProfileClick,
   currentTab
@@ -84,6 +86,12 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onImageEditorOpen} 
             icon={<Wand2 className="w-4 h-4" />}
             label="Image Editor"
+          />
+          <NavButton 
+            active={currentTab === 'image-matcher'} 
+            onClick={onImageMatcherOpen} 
+            icon={<Maximize className="w-4 h-4" />}
+            label="Image Matcher"
           />
           <NavButton 
             active={currentTab === 'store'} 

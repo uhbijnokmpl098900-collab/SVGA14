@@ -8,7 +8,7 @@ import {
   signOut,
   updateProfile
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { UserRecord } from '../types';
 
@@ -33,7 +33,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    let unsubscribeDoc: (() => void) | null = null;
+
+    const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
+      if (unsubscribeDoc) {
+        unsubscribeDoc();
+        unsubscribeDoc = null;
+      }
+
       if (user) {
         // Default user data from Auth
         const isAdmin = user.email === 'admin@demo.com' || user.email === 'aegy238@gmail.com';
@@ -54,36 +61,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           lastLogin: new Date()
         };
 
-        try {
-          // Try to fetch user data from Firestore
-          const userDocRef = doc(db, 'users', user.uid);
-          const userDoc = await getDoc(userDocRef);
-
-          if (userDoc.exists()) {
-            setCurrentUser({ id: user.uid, ...userDoc.data() } as UserRecord);
+        // Listen for real-time updates to the user document
+        const userDocRef = doc(db, 'users', user.uid);
+        unsubscribeDoc = onSnapshot(userDocRef, (docSnap) => {
+          if (docSnap.exists()) {
+            setCurrentUser({ id: user.uid, ...docSnap.data() } as UserRecord);
           } else {
-            // If doc doesn't exist, try to create it, but don't block if it fails
-            try {
-              await setDoc(userDocRef, basicUserData);
+            // If doc doesn't exist, try to create it once
+            setDoc(userDocRef, basicUserData).then(() => {
               setCurrentUser(basicUserData);
-            } catch (writeErr) {
-              console.warn("Could not create user document (likely permission issue):", writeErr);
-              // Fallback to basic data in memory
+            }).catch(err => {
+              console.warn("Could not create user document:", err);
               setCurrentUser(basicUserData);
-            }
+            });
           }
-        } catch (err) {
-          console.warn("Could not fetch user document (likely permission issue):", err);
-          // Fallback to basic data in memory
+          setLoading(false);
+        }, (err) => {
+          console.warn("User document snapshot error:", err);
           setCurrentUser(basicUserData);
-        }
+          setLoading(false);
+        });
       } else {
         setCurrentUser(null);
+        setLoading(false);
       }
-      setLoading(false);
     });
 
-    return unsubscribe;
+    return () => {
+      unsubscribeAuth();
+      if (unsubscribeDoc) unsubscribeDoc();
+    };
   }, []);
 
   const login = async (email: string, pass: string) => {

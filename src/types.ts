@@ -17,6 +17,7 @@ export enum AppState {
   VIDEO_CONVERTER = 'VIDEO_CONVERTER',
   IMAGE_CONVERTER = 'IMAGE_CONVERTER',
   IMAGE_EDITOR = 'IMAGE_EDITOR',
+  IMAGE_MATCHER = 'IMAGE_MATCHER',
   HOME = 'HOME'
 }
 
@@ -138,4 +139,17 @@ export interface FileMetadata {
   assets?: MaterialAsset[];
   videoItem?: any;
   fileUrl?: string;
+  originalFile?: File;
+}
+
+export interface SVGAFileInfo {
+  url: string;
+  name: string;
+}
+
+export enum PlayerStatus {
+  LOADING = 'LOADING',
+  PLAYING = 'PLAYING',
+  PAUSED = 'PAUSED',
+  ERROR = 'ERROR'
 }

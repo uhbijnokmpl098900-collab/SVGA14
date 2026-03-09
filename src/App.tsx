@@ -6,6 +6,7 @@ import { BatchCompressor } from './components/BatchCompressor';
 import { VideoConverter } from './components/VideoConverter';
 import { ImageToSvga } from './components/ImageToSvga';
 import { ImageEditor } from './components/ImageEditor';
+import { ImageMatcher } from './components/ImageMatcher';
 import { Store } from './components/Store';
 import { AdminPanel } from './components/AdminPanel';
 import { Login } from './components/Auth/Login';
@@ -222,7 +223,8 @@ const App: React.FC = () => {
           name: file.name, size: file.size, type: 'SVGA',
           dimensions: { width: videoItem.videoSize?.width || 0, height: videoItem.videoSize?.height || 0 },
           fps: extractedFps, frames: videoItem.frames || 0, assets: [], videoItem,
-          fileUrl: fileUrl 
+          fileUrl: fileUrl,
+          originalFile: file
         };
         
         setFileMetadata(meta);
@@ -275,6 +277,7 @@ const App: React.FC = () => {
         onConverterOpen={() => handleFeatureAccess(AppState.VIDEO_CONVERTER, 'Video Converter')}
         onImageConverterOpen={() => handleFeatureAccess(AppState.IMAGE_CONVERTER, 'Image Converter')}
         onImageEditorOpen={() => handleFeatureAccess(AppState.IMAGE_EDITOR, 'Image Editor')}
+        onImageMatcherOpen={() => handleFeatureAccess(AppState.IMAGE_MATCHER, 'Image Matcher')}
         onLoginClick={() => setShowAuthModal(true)}
         onProfileClick={() => setShowProfileModal(true)}
         currentTab={
@@ -283,6 +286,7 @@ const App: React.FC = () => {
           state === AppState.VIDEO_CONVERTER ? 'converter' : 
           state === AppState.IMAGE_CONVERTER ? 'image-converter' :
           state === AppState.IMAGE_EDITOR ? 'image-editor' :
+          state === AppState.IMAGE_MATCHER ? 'image-matcher' :
           'svga'
         }
       />
@@ -303,6 +307,7 @@ const App: React.FC = () => {
             )}
             {state === AppState.PROCESSING && fileMetadata && (
               <Workspace 
+                key={fileMetadata.fileUrl}
                 metadata={fileMetadata} 
                 onCancel={handleReset} 
                 settings={settings} 
@@ -310,6 +315,7 @@ const App: React.FC = () => {
                 onLoginRequired={() => setShowAuthModal(true)}
                 onSubscriptionRequired={() => setShowSubscriptionModal(true)}
                 globalQuality={globalQuality}
+                onFileReplace={(meta) => setFileMetadata(meta)}
               />
             )}
             {state === AppState.BATCH_COMPRESSOR && (
@@ -343,6 +349,14 @@ const App: React.FC = () => {
             )}
             {state === AppState.IMAGE_EDITOR && (
               <ImageEditor 
+                currentUser={currentUser} 
+                onCancel={handleReset} 
+                onLoginRequired={() => setShowAuthModal(true)}
+                onSubscriptionRequired={() => setShowSubscriptionModal(true)}
+              />
+            )}
+            {state === AppState.IMAGE_MATCHER && (
+              <ImageMatcher 
                 currentUser={currentUser} 
                 onCancel={handleReset} 
                 onLoginRequired={() => setShowAuthModal(true)}
