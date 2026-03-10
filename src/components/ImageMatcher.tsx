@@ -35,6 +35,7 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
   
   const [baseImage, setBaseImage] = useState<HTMLImageElement | null>(null);
   const [workingImage, setWorkingImage] = useState<HTMLImageElement | null>(null);
+  const [scale, setScale] = useState(1.0);
   const [isExporting, setIsExporting] = useState(false);
   
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -72,16 +73,16 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     
-    // Set canvas size to base image size
-    canvas.width = baseImage.width;
-    canvas.height = baseImage.height;
+    // Set canvas size to base image size * scale
+    canvas.width = baseImage.width * scale;
+    canvas.height = baseImage.height * scale;
     
     // Clear
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Draw Working Image stretched to match base image dimensions
+    // Draw Working Image stretched to match base image dimensions * scale
     if (workingImage) {
-      ctx.drawImage(workingImage, 0, 0, baseImage.width, baseImage.height);
+      ctx.drawImage(workingImage, 0, 0, canvas.width, canvas.height);
     } else {
       // If no working image, draw a placeholder or just clear
       ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
@@ -91,7 +92,7 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
       ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
     }
     
-  }, [baseImage, workingImage]);
+  }, [baseImage, workingImage, scale]);
 
   const handleExport = async () => {
     if (!baseImage || !workingImage) return;
@@ -111,25 +112,25 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
     
     try {
       const canvas = document.createElement('canvas');
-      canvas.width = baseImage.width;
-      canvas.height = baseImage.height;
+      canvas.width = baseImage.width * scale;
+      canvas.height = baseImage.height * scale;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       
-      // Draw working image stretched to base dimensions
-      ctx.drawImage(workingImage, 0, 0, baseImage.width, baseImage.height);
+      // Draw working image stretched to base dimensions * scale
+      ctx.drawImage(workingImage, 0, 0, canvas.width, canvas.height);
       
       const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
       if (blob) {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `resized_${Date.now()}.png`;
+        a.download = `resized_${Math.round(scale * 100)}_${Date.now()}.png`;
         a.click();
         URL.revokeObjectURL(url);
         
         if (currentUser) {
-          logActivity(currentUser, 'feature_usage', `Image resized to match: ${baseImage.width}x${baseImage.height}`);
+          logActivity(currentUser, 'feature_usage', `Image resized to match: ${canvas.width}x${canvas.height} (Scale: ${scale})`);
         }
       }
     } catch (e) {
@@ -197,9 +198,45 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
               </div>
             </div>
 
+            {/* Scale Control */}
+            <div className="space-y-3 pt-4 border-t border-white/5">
+              <label className="text-[10px] font-black uppercase tracking-widest text-amber-500 flex items-center gap-2">
+                <Settings2 className="w-3 h-3" />
+                حجم التصدير (Scale)
+              </label>
+              <div className="flex items-center gap-3 bg-white/5 p-3 rounded-2xl border border-white/5">
+                <input 
+                  type="range" 
+                  min="0.1" 
+                  max="1" 
+                  step="0.01" 
+                  value={scale} 
+                  onChange={(e) => setScale(parseFloat(e.target.value))}
+                  className="flex-1 h-1.5 bg-slate-700 rounded-full appearance-none cursor-pointer accent-amber-500"
+                />
+                <span className="text-[10px] font-mono text-amber-500 w-12 text-center">
+                  {Math.round(scale * 100)}%
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => setScale(1.0)}
+                  className={`flex-1 py-2 rounded-xl text-[9px] font-bold transition-all ${scale === 1.0 ? 'bg-amber-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                >
+                  المقاس الأصلي
+                </button>
+                <button 
+                  onClick={() => setScale(0.9)}
+                  className={`flex-1 py-2 rounded-xl text-[9px] font-bold transition-all ${scale === 0.9 ? 'bg-amber-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                >
+                  تصغير (90%)
+                </button>
+              </div>
+            </div>
+
             <div className="pt-4 border-t border-white/5">
                 <p className="text-[9px] text-slate-500 text-center leading-relaxed">
-                    سيتم تلقائياً تغيير أبعاد الصورة في الخانة الزرقاء لتصبح مطابقة تماماً لأبعاد الصورة في الخانة الخضراء عند التصدير.
+                    سيتم تلقائياً تغيير أبعاد الصورة في الخانة الزرقاء لتصبح مطابقة لأبعاد الصورة المرجعية (مع إمكانية التصغير) عند التصدير.
                 </p>
             </div>
 
@@ -230,7 +267,7 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
             ) : (
               <div className="relative max-w-full max-h-full overflow-auto custom-scrollbar p-4 flex flex-col items-center gap-4">
                 <div className="bg-green-500/20 border border-green-500/30 px-4 py-2 rounded-full text-[10px] font-black text-green-400 uppercase tracking-widest">
-                    معاينة النتيجة النهائية ({baseImage.width}x{baseImage.height})
+                    معاينة النتيجة النهائية ({Math.round(baseImage.width * scale)}x{Math.round(baseImage.height * scale)})
                 </div>
                 <canvas 
                   ref={canvasRef} 
