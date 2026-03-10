@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { FileMetadata, MaterialAsset, AppSettings, UserRecord, PresetBackground } from '../types';
-import { Layers, Download, Copy, Trash2 } from 'lucide-react';
+import { Layers, Download, Copy, Trash2, Lock } from 'lucide-react';
 import { logActivity } from '../utils/logger';
 import * as Mp4Muxer from 'mp4-muxer';
 import { FFmpeg } from '@ffmpeg/ffmpeg';
@@ -4081,9 +4081,10 @@ if (!this.JSON) { this.JSON = {}; }
       const allowed = Array.isArray(currentUser.allowedExportFormat) 
           ? currentUser.allowedExportFormat 
           : [currentUser.allowedExportFormat];
-      // Always show VAP (MP4) as requested
-      return availableFormats.filter(f => allowed.includes(f) && !hiddenFormats.includes(f));
-  }, [currentUser, availableFormats, hiddenFormats, mode]);
+      
+      // Always show SVGA 2.0 EX if enabled globally, even if not in allowed formats
+      return availableFormats.filter(f => (allowed.includes(f) || (f === 'SVGA 2.0 EX' && settings?.isSvgaExEnabled)) && !hiddenFormats.includes(f));
+  }, [currentUser, availableFormats, hiddenFormats, mode, settings?.isSvgaExEnabled]);
 
   useEffect(() => {
       if (!displayedFormats.includes(selectedFormat) && displayedFormats.length > 0) {
@@ -6284,19 +6285,32 @@ class _MyAppState extends State<MyApp> {
                  </button>
               )}
              <div className="flex flex-wrap gap-2">
-                {displayedFormats.filter(f => f !== 'VAP 1.0.5').map(f => (
-                  <button 
-                    key={f} 
-                    onClick={() => setSelectedFormat(f)} 
-                    className={`flex-1 py-3 px-2 rounded-xl text-[9px] font-black border transition-all whitespace-nowrap ${
-                      selectedFormat === f 
-                        ? 'bg-sky-500 text-white border-sky-400 shadow-glow-sky' 
-                        : 'bg-slate-950/40 text-slate-300 border-white/5 hover:bg-white/5'
-                    }`}
-                  >
-                    {f}
-                  </button>
-                ))}
+                {displayedFormats.filter(f => f !== 'VAP 1.0.5').map(f => {
+                  const isSvgaEx = f === 'SVGA 2.0 EX';
+                  const isLocked = isSvgaEx && !currentUser?.hasSvgaExAccess && currentUser?.role !== 'admin';
+                  return (
+                    <button 
+                      key={f} 
+                      onClick={() => {
+                        if (isLocked) {
+                          alert("عذراً، هذه الميزة مغلقة لحسابك. يرجى التواصل مع الإدارة لتفعيلها.");
+                          return;
+                        }
+                        setSelectedFormat(f);
+                      }} 
+                      className={`flex-1 py-3 px-2 rounded-xl text-[9px] font-black border transition-all whitespace-nowrap relative ${
+                        selectedFormat === f 
+                          ? 'bg-sky-500 text-white border-sky-400 shadow-glow-sky' 
+                          : 'bg-slate-950/40 text-slate-300 border-white/5 hover:bg-white/5'
+                      } ${isLocked ? 'opacity-70 grayscale-[0.5]' : ''}`}
+                    >
+                      <div className="flex items-center justify-center gap-1">
+                        {isLocked && <Lock className="w-2.5 h-2.5 text-amber-500" />}
+                        {f}
+                      </div>
+                    </button>
+                  );
+                })}
              </div>
              <button 
               onClick={handleMainExport} 
