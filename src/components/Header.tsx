@@ -65,10 +65,16 @@ export const Header: React.FC<HeaderProps> = ({
             icon={<Layers className="w-4 h-4" />}
             label="SVGA Editor"
           />
-          {(settings?.isSvgaExEnabled || currentUser?.hasSvgaExAccess) && (
+          {(settings?.isSvgaExEnabled || currentUser?.hasSvgaExAccess || isAdmin) && (
             <NavButton 
               active={currentTab === 'svga-ex'} 
-              onClick={onSvgaExOpen} 
+              onClick={() => {
+                if (!currentUser?.hasSvgaExAccess && !isAdmin) {
+                  alert("عذراً، هذه الميزة مغلقة لحسابك. يرجى التواصل مع الإدارة لتفعيلها.");
+                  return;
+                }
+                onSvgaExOpen();
+              }} 
               icon={<Layers className="w-4 h-4" />}
               label="SVGA Editor EX"
               variant="red"

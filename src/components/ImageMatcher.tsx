@@ -314,6 +314,12 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
                 </div>
 
                 <div className="grid grid-cols-3 gap-2">
+                  <button onClick={() => setManualScale(0.5)} className={`p-2 rounded-lg text-[9px] font-bold transition-all ${manualScale === 0.5 ? 'bg-sky-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}>50%</button>
+                  <button onClick={() => setManualScale(1.0)} className={`p-2 rounded-lg text-[9px] font-bold transition-all ${manualScale === 1.0 ? 'bg-sky-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}>100%</button>
+                  <button onClick={() => setManualScale(2.0)} className={`p-2 rounded-lg text-[9px] font-bold transition-all ${manualScale === 2.0 ? 'bg-sky-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}>200%</button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
                   <button onClick={() => setManualPos(p => ({ ...p, x: p.x - 10 }))} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg text-[10px] font-bold text-slate-400">يسار</button>
                   <div className="flex flex-col gap-2">
                     <button onClick={() => setManualPos(p => ({ ...p, y: p.y - 10 }))} className="p-2 bg-white/5 hover:bg-white/10 rounded-lg text-[10px] font-bold text-slate-400">فوق</button>
@@ -351,18 +357,36 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
                   {Math.round(scale * 100)}%
                 </span>
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <button 
                   onClick={() => setScale(1.0)}
                   className={`flex-1 py-2 rounded-xl text-[9px] font-bold transition-all ${scale === 1.0 ? 'bg-amber-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
                 >
-                  المقاس الأصلي
+                  100%
+                </button>
+                <button 
+                  onClick={() => setScale(0.9)}
+                  className={`flex-1 py-2 rounded-xl text-[9px] font-bold transition-all ${scale === 0.9 ? 'bg-amber-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                >
+                  90%
+                </button>
+                <button 
+                  onClick={() => setScale(0.8)}
+                  className={`flex-1 py-2 rounded-xl text-[9px] font-bold transition-all ${scale === 0.8 ? 'bg-amber-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                >
+                  80%
+                </button>
+                <button 
+                  onClick={() => setScale(0.75)}
+                  className={`flex-1 py-2 rounded-xl text-[9px] font-bold transition-all ${scale === 0.75 ? 'bg-amber-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                >
+                  75%
                 </button>
                 <button 
                   onClick={() => setScale(0.5)}
                   className={`flex-1 py-2 rounded-xl text-[9px] font-bold transition-all ${scale === 0.5 ? 'bg-amber-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
                 >
-                  تصغير (50%)
+                  50%
                 </button>
               </div>
             </div>
