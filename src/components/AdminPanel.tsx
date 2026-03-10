@@ -10,7 +10,7 @@ interface AdminPanelProps {
   onCancel: () => void;
 }
 
-const EXPORT_FORMATS = ['AE Project', 'SVGA 2.0', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP 1.0.5', 'VAP (MP4)'];
+const EXPORT_FORMATS = ['AE Project', 'SVGA 2.0', 'SVGA 2.0 EX', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP 1.0.5', 'VAP (MP4)'];
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel }) => {
   const [activeTab, setActiveTab] = useState<'users' | 'keys' | 'assets' | 'settings' | 'records'>('users');
@@ -80,6 +80,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
       setUsers(users.map(u => u.id === userId ? { ...u, status: newStatus as any } : u));
     } catch (error) {
       console.error("Error updating user:", error);
+    }
+  };
+
+  const handleToggleSvgaExAccess = async (userId: string, currentAccess: boolean) => {
+    try {
+      const newAccess = !currentAccess;
+      await updateDoc(doc(db, 'users', userId), { hasSvgaExAccess: newAccess });
+      setUsers(users.map(u => u.id === userId ? { ...u, hasSvgaExAccess: newAccess } : u));
+    } catch (error) {
+      console.error("Error updating SVGA EX access:", error);
+      alert("فشل تحديث صلاحية SVGA EX");
     }
   };
 
@@ -395,6 +406,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                                   <SettingsIcon className="w-4 h-4" />
                                 </button>
                               </div>
+                              <button 
+                                onClick={() => handleToggleSvgaExAccess(user.id, !!user.hasSvgaExAccess)}
+                                className={`p-1.5 rounded transition-colors ${user.hasSvgaExAccess ? 'bg-red-500/20 text-red-400' : 'hover:bg-slate-500/20 text-slate-400'}`} 
+                                title={user.hasSvgaExAccess ? "إلغاء صلاحية SVGA EX" : "منح صلاحية SVGA EX"}
+                              >
+                                <BadgeCheck className="w-4 h-4" />
+                              </button>
                             </td>
                           </tr>
                         ))}
@@ -755,6 +773,20 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                           onChange={e => setSettings(prev => prev ? { ...prev, defaultFreeAttempts: Number(e.target.value) } : null)}
                           className="w-full bg-slate-950/50 border border-white/10 rounded-lg px-4 py-3 focus:outline-none focus:border-indigo-500/50 transition-colors"
                         />
+                    </div>
+
+                    <div className="flex items-center justify-between p-4 bg-slate-950/30 border border-white/10 rounded-xl">
+                        <div className="flex flex-col gap-1">
+                            <span className="text-sm font-bold text-white">تفعيل SVGA Editor EX للجميع</span>
+                            <span className="text-[10px] text-slate-500">عند التفعيل، سيظهر الزر لجميع المستخدمين (مع القفل إذا لم يملكوا صلاحية)</span>
+                        </div>
+                        <button 
+                            type="button"
+                            onClick={() => setSettings(prev => prev ? { ...prev, isSvgaExEnabled: !prev.isSvgaExEnabled } : null)}
+                            className={`w-12 h-6 rounded-full transition-all relative ${settings?.isSvgaExEnabled ? 'bg-red-500' : 'bg-slate-700'}`}
+                        >
+                            <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all ${settings?.isSvgaExEnabled ? 'right-7' : 'right-1'}`}></div>
+                        </button>
                     </div>
 
                     <div className="pt-4 border-t border-white/10">

@@ -24,6 +24,7 @@ import { VapPlayer } from './VapPlayer';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAccessControl } from '../hooks/useAccessControl';
 import { svgaSchema } from '../svga-proto';
+import { handleSvgaExExport } from '../utils/svgaExExport';
 
 interface WorkspaceProps {
   metadata: FileMetadata;
@@ -34,6 +35,7 @@ interface WorkspaceProps {
   onSubscriptionRequired: () => void;
   globalQuality?: 'low' | 'medium' | 'high';
   onFileReplace?: (meta: FileMetadata) => void;
+  mode?: 'normal' | 'ex';
 }
 
 interface CustomLayer {
@@ -50,7 +52,7 @@ interface CustomLayer {
 
 const TRANSPARENT_PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
-export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata, onCancel, settings, currentUser, onLoginRequired, onSubscriptionRequired, globalQuality: initialGlobalQuality = 'high', onFileReplace }) => {
+export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata, onCancel, settings, currentUser, onLoginRequired, onSubscriptionRequired, globalQuality: initialGlobalQuality = 'high', onFileReplace, mode = 'normal' }) => {
   const { checkAccess } = useAccessControl();
   const { t, dir } = useLanguage();
   const [metadata, setMetadata] = useState<FileMetadata>(initialMetadata);
@@ -4069,16 +4071,19 @@ if (!this.JSON) { this.JSON = {}; }
     }
   }, [currentUser, selectedFormat]);
 
-  const availableFormats = ['AE Project', 'SVGA 2.0', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP (MP4)', 'VAP 1.0.5'];
+  const availableFormats = ['AE Project', 'SVGA 2.0', 'SVGA 2.0 EX', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP (MP4)', 'VAP 1.0.5'];
   
   const displayedFormats = useMemo(() => {
+      // If we are in EX mode, only show SVGA 2.0 EX
+      if (mode === 'ex') return ['SVGA 2.0 EX'];
+
       if (!currentUser?.allowedExportFormat) return availableFormats.filter(f => !hiddenFormats.includes(f));
       const allowed = Array.isArray(currentUser.allowedExportFormat) 
           ? currentUser.allowedExportFormat 
           : [currentUser.allowedExportFormat];
       // Always show VAP (MP4) as requested
       return availableFormats.filter(f => allowed.includes(f) && !hiddenFormats.includes(f));
-  }, [currentUser, availableFormats, hiddenFormats]);
+  }, [currentUser, availableFormats, hiddenFormats, mode]);
 
   useEffect(() => {
       if (!displayedFormats.includes(selectedFormat) && displayedFormats.length > 0) {
@@ -4121,6 +4126,15 @@ if (!this.JSON) { this.JSON = {}; }
     logActivity(currentUser, 'export', `Exported ${metadata.name}`, currentFormat);
 
     if (currentFormat === 'AE Project') await handleExportAEProject();
+    else if (currentFormat === 'SVGA 2.0 EX') {
+        await handleSvgaExExport({
+            metadata, videoWidth, videoHeight, exportScale, svgaScale, svgaPos,
+            layerImages, assetColors, deletedKeys, customLayers, watermark,
+            wmScale, wmPos, audioUrl, audioFile, originalAudioUrl, fadeConfig,
+            applyTransparencyEffects, setProgress, setExportPhase, setIsExporting,
+            protobuf
+        });
+    }
     else if (currentFormat === 'Image Sequence') await handleExportImageSequence();
     else if (currentFormat === 'GIF (Animation)') await handleExportGIF();
     else if (currentFormat === 'APNG (Animation)') await handleExportAPNG();
@@ -6271,10 +6285,29 @@ class _MyAppState extends State<MyApp> {
               )}
              <div className="flex flex-wrap gap-2">
                 {displayedFormats.filter(f => f !== 'VAP 1.0.5').map(f => (
-                  <button key={f} onClick={() => setSelectedFormat(f)} className={`flex-1 py-3 px-2 rounded-xl text-[9px] font-black border transition-all whitespace-nowrap ${selectedFormat === f ? 'bg-sky-500 text-white border-sky-400' : 'bg-slate-950/40 text-slate-300'}`}>{f}</button>
+                  <button 
+                    key={f} 
+                    onClick={() => setSelectedFormat(f)} 
+                    className={`flex-1 py-3 px-2 rounded-xl text-[9px] font-black border transition-all whitespace-nowrap ${
+                      selectedFormat === f 
+                        ? 'bg-sky-500 text-white border-sky-400 shadow-glow-sky' 
+                        : 'bg-slate-950/40 text-slate-300 border-white/5 hover:bg-white/5'
+                    }`}
+                  >
+                    {f}
+                  </button>
                 ))}
              </div>
-             <button onClick={handleMainExport} className="w-full py-5 bg-sky-500 hover:bg-sky-400 text-white text-[11px] font-black rounded-[2rem] shadow-glow-sky active:scale-95">بدء التصدير الاحترافي</button>
+             <button 
+              onClick={handleMainExport} 
+              className={`w-full py-5 text-white text-[11px] font-black rounded-[2rem] active:scale-95 transition-all ${
+                mode === 'ex' 
+                  ? 'bg-[#ff0000] hover:bg-red-600 shadow-glow-red' 
+                  : 'bg-sky-500 hover:bg-sky-400 shadow-glow-sky'
+              }`}
+            >
+              بدء التصدير الاحترافي
+            </button>
           </div>
         </div>
       </div>

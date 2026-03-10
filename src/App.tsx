@@ -67,6 +67,12 @@ const App: React.FC = () => {
   }, []);
 
   const handleFeatureAccess = async (targetState: AppState, featureName: string) => {
+    if (targetState === AppState.SVGA_EDITOR_EX) {
+        if (!currentUser?.hasSvgaExAccess && currentUser?.role !== 'admin') {
+            alert("عذراً، لا تملك صلاحية الوصول إلى هذا المحرك. يرجى التواصل مع الدعم الفني.");
+            return;
+        }
+    }
     // Allow access to the tool, but the tool itself will handle export restrictions
     setState(targetState);
   };
@@ -278,6 +284,7 @@ const App: React.FC = () => {
         onImageConverterOpen={() => handleFeatureAccess(AppState.IMAGE_CONVERTER, 'Image Converter')}
         onImageEditorOpen={() => handleFeatureAccess(AppState.IMAGE_EDITOR, 'Image Editor')}
         onImageMatcherOpen={() => handleFeatureAccess(AppState.IMAGE_MATCHER, 'Image Matcher')}
+        onSvgaExOpen={() => handleFeatureAccess(AppState.SVGA_EDITOR_EX, 'SVGA Editor EX')}
         onLoginClick={() => setShowAuthModal(true)}
         onProfileClick={() => setShowProfileModal(true)}
         currentTab={
@@ -287,6 +294,7 @@ const App: React.FC = () => {
           state === AppState.IMAGE_CONVERTER ? 'image-converter' :
           state === AppState.IMAGE_EDITOR ? 'image-editor' :
           state === AppState.IMAGE_MATCHER ? 'image-matcher' :
+          state === AppState.SVGA_EDITOR_EX ? 'svga-ex' :
           'svga'
         }
       />
@@ -305,7 +313,7 @@ const App: React.FC = () => {
                 />
               </div>
             )}
-            {state === AppState.PROCESSING && fileMetadata && (
+            {(state === AppState.PROCESSING || state === AppState.SVGA_EDITOR_EX) && fileMetadata && (
               <Workspace 
                 key={fileMetadata.fileUrl}
                 metadata={fileMetadata} 
@@ -316,6 +324,7 @@ const App: React.FC = () => {
                 onSubscriptionRequired={() => setShowSubscriptionModal(true)}
                 globalQuality={globalQuality}
                 onFileReplace={(meta) => setFileMetadata(meta)}
+                mode={state === AppState.SVGA_EDITOR_EX ? 'ex' : 'normal'}
               />
             )}
             {state === AppState.BATCH_COMPRESSOR && (

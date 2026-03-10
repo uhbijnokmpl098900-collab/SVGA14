@@ -18,6 +18,7 @@ export enum AppState {
   IMAGE_CONVERTER = 'IMAGE_CONVERTER',
   IMAGE_EDITOR = 'IMAGE_EDITOR',
   IMAGE_MATCHER = 'IMAGE_MATCHER',
+  SVGA_EDITOR_EX = 'SVGA_EDITOR_EX',
   HOME = 'HOME'
 }
 
@@ -75,6 +76,7 @@ export interface UserRecord {
   createdAt: any;
   lastLogin: any;
   allowedExportFormat?: string | string[]; // Restrict user to specific format(s)
+  hasSvgaExAccess?: boolean; // Per-user access to SVGA 2.0 EX
 }
 
 export interface PresetBackground {
@@ -103,6 +105,7 @@ export interface AppSettings {
   whatsappNumber: string;
   isRegistrationOpen: boolean;
   defaultFreeAttempts: number;
+  isSvgaExEnabled: boolean; // Global toggle for SVGA 2.0 EX
   costs: {
     svgaProcess: number;
     batchCompress: number;

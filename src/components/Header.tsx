@@ -1,6 +1,6 @@
 import React from 'react';
 import { UserRecord, AppSettings } from '../types';
-import { LogOut, Settings, ShoppingBag, Image, Video, Layers, Wand2, BadgeCheck, Maximize } from 'lucide-react';
+import { LogOut, Settings, ShoppingBag, Image, Video, Layers, Wand2, BadgeCheck, Maximize, Lock } from 'lucide-react';
 
 interface HeaderProps {
   onLogoClick: () => void;
@@ -16,6 +16,7 @@ interface HeaderProps {
   onImageConverterOpen: () => void;
   onImageEditorOpen: () => void;
   onImageMatcherOpen: () => void;
+  onSvgaExOpen: () => void;
   onLoginClick: () => void;
   onProfileClick: () => void;
   currentTab: string;
@@ -35,6 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
   onImageConverterOpen,
   onImageEditorOpen,
   onImageMatcherOpen,
+  onSvgaExOpen,
   onLoginClick,
   onProfileClick,
   currentTab
@@ -63,6 +65,16 @@ export const Header: React.FC<HeaderProps> = ({
             icon={<Layers className="w-4 h-4" />}
             label="SVGA Editor"
           />
+          {(settings?.isSvgaExEnabled || currentUser?.hasSvgaExAccess) && (
+            <NavButton 
+              active={currentTab === 'svga-ex'} 
+              onClick={onSvgaExOpen} 
+              icon={<Layers className="w-4 h-4" />}
+              label="SVGA Editor EX"
+              variant="red"
+              locked={!currentUser?.hasSvgaExAccess && !isAdmin}
+            />
+          )}
           <NavButton 
             active={currentTab === 'converter'} 
             onClick={onConverterOpen} 
@@ -156,18 +168,29 @@ interface NavButtonProps {
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  variant?: 'default' | 'red';
+  locked?: boolean;
 }
 
-const NavButton: React.FC<NavButtonProps> = ({ active, onClick, icon, label }) => (
+const NavButton: React.FC<NavButtonProps> = ({ active, onClick, icon, label, variant = 'default', locked = false }) => (
   <button
     onClick={onClick}
-    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+    className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 relative ${
       active 
-        ? 'bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20' 
-        : 'text-slate-400 hover:text-white hover:bg-white/5'
+        ? variant === 'red' 
+          ? 'bg-[#ff0000] text-black shadow-glow-red'
+          : 'bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20' 
+        : variant === 'red'
+          ? 'bg-[#ff0000] text-black hover:bg-red-600'
+          : 'text-slate-400 hover:text-white hover:bg-white/5'
     }`}
   >
     {icon}
-    <span>{label}</span>
+    <span className={variant === 'red' ? 'text-black font-black' : ''}>{label}</span>
+    {locked && (
+        <div className="absolute -top-1 -right-1 bg-slate-900 rounded-full p-0.5 border border-white/10">
+            <Lock className="w-2.5 h-2.5 text-amber-500" />
+        </div>
+    )}
   </button>
 );
