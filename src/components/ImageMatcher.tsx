@@ -208,7 +208,7 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
                 <input 
                   type="range" 
                   min="0.1" 
-                  max="1" 
+                  max="2" 
                   step="0.01" 
                   value={scale} 
                   onChange={(e) => setScale(parseFloat(e.target.value))}
@@ -226,10 +226,10 @@ export const ImageMatcher: React.FC<ImageMatcherProps> = ({
                   المقاس الأصلي
                 </button>
                 <button 
-                  onClick={() => setScale(0.9)}
-                  className={`flex-1 py-2 rounded-xl text-[9px] font-bold transition-all ${scale === 0.9 ? 'bg-amber-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
+                  onClick={() => setScale(0.5)}
+                  className={`flex-1 py-2 rounded-xl text-[9px] font-bold transition-all ${scale === 0.5 ? 'bg-amber-500 text-white' : 'bg-white/5 text-slate-400 hover:bg-white/10'}`}
                 >
-                  تصغير (90%)
+                  تصغير (50%)
                 </button>
               </div>
             </div>
