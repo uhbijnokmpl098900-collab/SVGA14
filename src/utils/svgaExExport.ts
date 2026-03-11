@@ -28,14 +28,15 @@ export const handleSvgaExExport = async (params: {
     setProgress: (p: number) => void,
     setExportPhase: (ph: string) => void,
     setIsExporting: (ex: boolean) => void,
-    protobuf: any
+    protobuf: any,
+    globalQuality?: 'low' | 'medium' | 'high'
 }) => {
     const {
         metadata, videoWidth, videoHeight, exportScale, svgaScale, svgaPos,
         layerImages, assetColors, deletedKeys, customLayers, watermark,
         wmScale, wmPos, audioUrl, audioFile, originalAudioUrl, fadeConfig,
         applyTransparencyEffects, setProgress, setExportPhase, setIsExporting,
-        protobuf
+        protobuf, globalQuality
     } = params;
 
     const isEdgeFadeActive = fadeConfig.top > 0 || fadeConfig.bottom > 0 || fadeConfig.left > 0 || fadeConfig.right > 0;
@@ -57,7 +58,7 @@ export const handleSvgaExExport = async (params: {
                 params: {
                     viewBoxWidth: vi.videoSize?.width || videoWidth,
                     viewBoxHeight: vi.videoSize?.height || videoHeight,
-                    fps: vi.FPS || metadata.fps || 30,
+                    fps: metadata.fps || vi.FPS || 30,
                     frames: vi.frames || metadata.frames || 0
                 },
                 images: {}, // Will be populated below
@@ -151,14 +152,21 @@ export const handleSvgaExExport = async (params: {
 
             if (!finalBase64) continue;
 
-            // Apply modifications (Scale, Tint, Fade)
+            // Apply modifications (Scale, Tint, Fade, Quality)
             const hasColorTint = !!assetColors[key];
-            if (exportScale < 0.99 || isEdgeFadeActive || hasColorTint) {
+            const needsQualityCompression = globalQuality === 'low' || globalQuality === 'medium';
+            
+            if (exportScale < 0.99 || isEdgeFadeActive || hasColorTint || needsQualityCompression) {
                 const img = new Image();
                 img.src = finalBase64;
                 await new Promise(r => img.onload = r);
                 const canvas = document.createElement('canvas');
-                const targetScale = exportScale < 0.99 ? exportScale : 1.0;
+                
+                let targetScale = exportScale < 0.99 ? exportScale : 1.0;
+                // Auto-downscale for low quality
+                if (globalQuality === 'low' && targetScale > 0.7) targetScale = 0.7;
+                if (globalQuality === 'medium' && targetScale > 0.85) targetScale = 0.85;
+
                 canvas.width = Math.floor(img.width * targetScale);
                 canvas.height = Math.floor(img.height * targetScale);
                 const ctx = canvas.getContext('2d');
@@ -169,6 +177,22 @@ export const handleSvgaExExport = async (params: {
                         ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
                     }
                     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    
+                    // Apply color levels reduction if quality is low
+                    if (needsQualityCompression) {
+                        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                        const data = imageData.data;
+                        const qFactor = globalQuality === 'low' ? 0.4 : 0.7;
+                        const levels = Math.max(2, Math.floor(qFactor * 255));
+                        const factor = 255 / (levels - 1);
+                        for (let j = 0; j < data.length; j += 4) {
+                            data[j] = Math.round(Math.round(data[j] / factor) * factor);
+                            data[j+1] = Math.round(Math.round(data[j+1] / factor) * factor);
+                            data[j+2] = Math.round(Math.round(data[j+2] / factor) * factor);
+                        }
+                        ctx.putImageData(imageData, 0, 0);
+                    }
+
                     if (isEdgeFadeActive) applyTransparencyEffects(ctx, canvas.width, canvas.height);
                     finalBase64 = canvas.toDataURL('image/png');
                 }

@@ -3447,21 +3447,23 @@ if (!this.JSON) { this.JSON = {}; }
                     const audioBuffer = await offlineCtx.decodeAudioData(arrayBuffer);
                     
                     audioTrack = {
-                        codec: 'A_OPUS',
+                        codec: recordingFormat === 'mp4' ? 'mp4a.40.2' : 'A_OPUS',
                         numberOfChannels: 2,
                         sampleRate: 48000
                     };
 
                     const numberOfChannels = 2;
-                    const length = audioBuffer.length;
                     const sampleRate = audioBuffer.sampleRate;
+                    // Limit audio length to recordingDuration to prevent extra audio in export
+                    const maxSamples = Math.floor(recordingDuration * sampleRate);
+                    const length = Math.min(audioBuffer.length, maxSamples);
                     const planarBuffer = new Float32Array(length * numberOfChannels);
                     
                     for (let c = 0; c < numberOfChannels; c++) {
                         const channelData = audioBuffer.numberOfChannels > c 
                             ? audioBuffer.getChannelData(c) 
                             : audioBuffer.getChannelData(0);
-                        planarBuffer.set(channelData, c * length);
+                        planarBuffer.set(channelData.subarray(0, length), c * length);
                     }
 
                     const chunkSize = sampleRate;
@@ -3488,30 +3490,45 @@ if (!this.JSON) { this.JSON = {}; }
             }
         }
 
-        const muxer = new WebMMuxer.Muxer({
-            target: new WebMMuxer.ArrayBufferTarget(),
-            video: {
-                codec: 'V_VP9',
-                width: safeWidth,
-                height: safeHeight,
-                frameRate: fps,
-                alpha: false
-            },
-            audio: audioTrack
-        });
+        const muxer = recordingFormat === 'mp4' 
+            ? new Mp4Muxer.Muxer({
+                target: new Mp4Muxer.ArrayBufferTarget(),
+                video: {
+                    codec: 'avc',
+                    width: safeWidth,
+                    height: safeHeight
+                },
+                audio: audioTrack ? {
+                    codec: 'aac',
+                    numberOfChannels: 2,
+                    sampleRate: 48000
+                } : undefined,
+                fastStart: 'in-memory'
+            })
+            : new WebMMuxer.Muxer({
+                target: new WebMMuxer.ArrayBufferTarget(),
+                video: {
+                    codec: 'V_VP9',
+                    width: safeWidth,
+                    height: safeHeight,
+                    frameRate: fps,
+                    alpha: false
+                },
+                audio: audioTrack
+            });
 
         const videoEncoder = new VideoEncoder({
-            output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-            error: (e) => console.error(e)
+            output: (chunk: any, meta: any) => muxer.addVideoChunk(chunk, meta),
+            error: (e: any) => console.error(e)
         });
 
         if (audioTrack) {
             audioEncoder = new AudioEncoder({
-                output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-                error: (e) => console.error(e)
+                output: (chunk: any, meta: any) => muxer.addAudioChunk(chunk, meta),
+                error: (e: any) => console.error(e)
             });
             audioEncoder.configure({
-                codec: 'opus',
+                codec: recordingFormat === 'mp4' ? 'mp4a.40.2' : 'opus',
                 numberOfChannels: 2,
                 sampleRate: 48000,
                 bitrate: 128000
@@ -3527,12 +3544,16 @@ if (!this.JSON) { this.JSON = {}; }
         if (globalQuality === 'high') bitrate = 15000000;
         if (globalQuality === 'low') bitrate = 4000000;
 
+        const videoCodec = recordingFormat === 'mp4' 
+            ? ((safeWidth * safeHeight) > 2228224 ? 'avc1.4d0033' : 'avc1.4d002a')
+            : 'vp09.00.10.08';
+
         videoEncoder.configure({
-            codec: 'vp09.00.10.08',
+            codec: videoCodec,
             width: safeWidth,
             height: safeHeight,
             bitrate: bitrate, 
-            alpha: 'discard'
+            alpha: recordingFormat === 'mp4' ? undefined : 'discard'
         });
 
         setExportPhase('جاري تسجيل الإطارات (Rendering)...');
@@ -3607,25 +3628,18 @@ if (!this.JSON) { this.JSON = {}; }
             setProgress(Math.floor(((i + 1) / targetFrames) * 100));
         }
 
-        // Add one last frame to prevent abrupt cut
-        if (targetFrames > 0) {
-             const bitmap = await createImageBitmap(compCanvas);
-             const frame = new VideoFrame(bitmap, { timestamp: (targetFrames * 1000000) / fps });
-             videoEncoder.encode(frame, { keyFrame: false });
-             frame.close();
-             bitmap.close();
-        }
-
         await videoEncoder.flush();
         muxer.finalize();
 
         const buffer = muxer.target.buffer;
-        const blob = new Blob([buffer], { type: 'video/webm' });
+        const mimeType = recordingFormat === 'mp4' ? 'video/mp4' : 'video/webm';
+        const extension = recordingFormat === 'mp4' ? 'mp4' : 'webm';
+        const blob = new Blob([buffer], { type: mimeType });
         const url = URL.createObjectURL(blob);
         
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${metadata.name.replace('.svga', '')}_Recording.webm`;
+        a.download = `${metadata.name.replace('.svga', '')}_Recording.${extension}`;
         a.click();
 
         svgaInstance.stepToFrame(originalFrame, true);
@@ -3641,6 +3655,7 @@ if (!this.JSON) { this.JSON = {}; }
   };
 
   const [showRecordingModal, setShowRecordingModal] = useState(false);
+  const [recordingFormat, setRecordingFormat] = useState<'webm' | 'mp4'>('mp4');
 
   const handleReplaceSvgaFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -4133,7 +4148,7 @@ if (!this.JSON) { this.JSON = {}; }
             layerImages, assetColors, deletedKeys, customLayers, watermark,
             wmScale, wmPos, audioUrl, audioFile, originalAudioUrl, fadeConfig,
             applyTransparencyEffects, setProgress, setExportPhase, setIsExporting,
-            protobuf
+            protobuf, globalQuality
         });
     }
     else if (currentFormat === 'Image Sequence') await handleExportImageSequence();
@@ -4152,8 +4167,10 @@ if (!this.JSON) { this.JSON = {}; }
             svgaInstance.pauseAnimation();
             const originalFrame = currentFrame;
             // Use the actual FPS from the SVGA file if available to prevent frame mismatch/stuttering
-            const fps = svgaInstance.videoItem?.FPS || metadata.fps || 30;
-            const totalFrames = svgaInstance.videoItem?.frames || metadata.frames || 0;
+            const fps = metadata.fps || svgaInstance.videoItem?.FPS || 30;
+            const originalTotalFrames = svgaInstance.videoItem?.frames || metadata.frames || 0;
+            // Use recordingDuration if specified, otherwise fallback to original duration
+            const totalFrames = Math.ceil(recordingDuration * fps) || originalTotalFrames;
             
             // Ensure even dimensions for video encoding
             const safeWidth = videoWidth % 2 === 0 ? videoWidth : videoWidth - 1;
@@ -4363,7 +4380,8 @@ if (!this.JSON) { this.JSON = {}; }
             const frameDurationMicros = Math.round(1000000 / fps);
 
             for (let i = 0; i < totalFrames; i++) {
-                svgaInstance.stepToFrame(i, true);
+                // Use modulo to loop the animation if totalFrames > originalTotalFrames
+                svgaInstance.stepToFrame(i % originalTotalFrames, true);
                 
                 // Wait for frame rendering - use requestAnimationFrame to sync with paint if possible, 
                 // but here we use a small delay to allow SVGA to draw.
@@ -5290,7 +5308,7 @@ if (!this.JSON) { this.JSON = {}; }
                <div className="flex-1 w-full flex flex-col gap-3">
                   <div className="flex justify-between items-center px-1">
                     <div className="flex items-center gap-2">
-                       <span className="text-white font-black text-[10px] px-2 py-0.5 sm:px-3 sm:py-1 bg-white/5 rounded-lg border border-white/5">{currentFrame} / {metadata.frames}</span>
+                       <span className="text-white font-black text-[10px] px-2 py-0.5 sm:px-3 sm:py-1 bg-white/5 rounded-lg border border-white/5">{currentFrame} / {metadata.frames || 0} ({((currentFrame) / (metadata.fps || 20)).toFixed(2)}s / {((metadata.frames || 0) / (metadata.fps || 20)).toFixed(2)}s)</span>
                        {audioUrl && (
                          <span className="flex items-center gap-1 text-[8px] sm:text-[9px] font-black text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20 animate-pulse">
                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
@@ -5844,6 +5862,23 @@ if (!this.JSON) { this.JSON = {}; }
                                         <span className="text-slate-500 text-[10px] font-black uppercase">{t('frames')}</span>
                                         <span className="text-sky-400 font-mono font-bold">{metadata.frames} Frame</span>
                                     </div>
+                                    <div className="flex justify-between items-center pt-2 border-t border-white/5">
+                                        <span className="text-slate-500 text-[10px] font-black uppercase">صيغة التصدير</span>
+                                        <div className="flex bg-black/50 rounded-lg p-1 border border-white/10">
+                                            <button 
+                                                onClick={() => setRecordingFormat('mp4')}
+                                                className={`px-3 py-1 rounded-md text-[10px] font-bold transition-all ${recordingFormat === 'mp4' ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/20' : 'text-slate-500 hover:text-white'}`}
+                                            >
+                                                MP4
+                                            </button>
+                                            <button 
+                                                onClick={() => setRecordingFormat('webm')}
+                                                className={`px-3 py-1 rounded-md text-[10px] font-bold transition-all ${recordingFormat === 'webm' ? 'bg-sky-500 text-white shadow-lg shadow-sky-500/20' : 'text-slate-500 hover:text-white'}`}
+                                            >
+                                                WebM
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <div className="p-4 bg-sky-500/10 border border-sky-500/20 rounded-2xl">
@@ -6234,6 +6269,30 @@ class _MyAppState extends State<MyApp> {
                                         className="w-16 bg-transparent text-center text-white font-mono font-bold text-lg outline-none"
                                     />
                                     <span className="text-purple-500 font-bold text-xs ml-1">FPS</span>
+                                </div>
+                            </div>
+
+                            {/* Duration (Seconds) */}
+                            <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex items-center justify-between hover:bg-white/[0.07] transition-all group">
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider group-hover:text-sky-400 transition-colors">مدة العرض (ثواني)</span>
+                                    <span className="text-[8px] text-slate-600">تعديل المدة الإجمالية</span>
+                                </div>
+                                <div className="flex items-center bg-black/50 rounded-xl border border-white/10 px-4 py-2 group-hover:border-sky-500/30 transition-all">
+                                    <input 
+                                        type="number" 
+                                        step="0.1"
+                                        value={((metadata.frames || 0) / (metadata.fps || 30)).toFixed(2)}
+                                        onChange={(e) => {
+                                            const duration = parseFloat(e.target.value);
+                                            if (duration > 0 && metadata.frames) {
+                                                const newFps = metadata.frames / duration;
+                                                setMetadata({...metadata, fps: Math.min(120, Math.max(1, newFps))});
+                                            }
+                                        }}
+                                        className="w-16 bg-transparent text-center text-white font-mono font-bold text-lg outline-none"
+                                    />
+                                    <span className="text-sky-500 font-bold text-xs ml-1">SEC</span>
                                 </div>
                             </div>
                         </div>
