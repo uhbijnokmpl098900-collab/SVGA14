@@ -4083,7 +4083,7 @@ if (!this.JSON) { this.JSON = {}; }
           : [currentUser.allowedExportFormat];
       
       // Always show SVGA 2.0 and SVGA 2.0 EX if enabled globally, even if not in allowed formats
-      return availableFormats.filter(f => (allowed.includes(f) || (f === 'SVGA 2.0 EX' && settings?.isSvgaExEnabled) || (f === 'SVGA 2.0')) && !hiddenFormats.includes(f));
+      return availableFormats.filter(f => (allowed.includes(f) || (f === 'SVGA 2.0' && settings?.isSvgaExEnabled) || (f === 'SVGA 2.0 EX')) && !hiddenFormats.includes(f));
   }, [currentUser, availableFormats, hiddenFormats, mode, settings?.isSvgaExEnabled]);
 
   useEffect(() => {
@@ -6286,8 +6286,8 @@ class _MyAppState extends State<MyApp> {
               )}
              <div className="flex flex-wrap gap-2">
                 {displayedFormats.filter(f => f !== 'VAP 1.0.5').map(f => {
-                  const isSvgaEx = f === 'SVGA 2.0 EX';
-                  const isLocked = isSvgaEx && !currentUser?.hasSvgaExAccess && currentUser?.role !== 'admin';
+                  const isSvga2 = f === 'SVGA 2.0';
+                  const isLocked = isSvga2 && !currentUser?.hasSvgaExAccess && currentUser?.role !== 'admin';
                   return (
                     <button 
                       key={f} 

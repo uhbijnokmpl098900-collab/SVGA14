@@ -409,7 +409,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                               <button 
                                 onClick={() => handleToggleSvgaExAccess(user.id, !!user.hasSvgaExAccess)}
                                 className={`p-1.5 rounded transition-colors ${user.hasSvgaExAccess ? 'bg-red-500/20 text-red-400' : 'hover:bg-slate-500/20 text-slate-400'}`} 
-                                title={user.hasSvgaExAccess ? "إلغاء صلاحية SVGA EX" : "منح صلاحية SVGA EX"}
+                                title={user.hasSvgaExAccess ? "إلغاء صلاحية SVGA 2.0" : "منح صلاحية SVGA 2.0"}
                               >
                                 <BadgeCheck className="w-4 h-4" />
                               </button>
@@ -777,7 +777,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
 
                     <div className="flex items-center justify-between p-4 bg-slate-950/30 border border-white/10 rounded-xl">
                         <div className="flex flex-col gap-1">
-                            <span className="text-sm font-bold text-white">تفعيل SVGA Editor EX للجميع</span>
+                            <span className="text-sm font-bold text-white">تفعيل SVGA 2.0 للجميع</span>
                             <span className="text-[10px] text-slate-500">عند التفعيل، سيظهر الزر لجميع المستخدمين (مع القفل إذا لم يملكوا صلاحية)</span>
                         </div>
                         <button 
