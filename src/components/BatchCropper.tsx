@@ -224,40 +224,42 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
 
   // Handle Resizing Logic for the Crop Box
   const [resizing, setResizing] = useState<string | null>(null);
-  const [startPos, setStartPos] = useState({ x: 0, y: 0, area: { ...cropArea } });
+  const startPosRef = useRef({ x: 0, y: 0, area: { ...cropArea } });
+  const requestRef = useRef<number | null>(null);
 
   const onHandleMouseDown = (e: React.MouseEvent, handle: string) => {
+    e.preventDefault();
     e.stopPropagation();
     setResizing(handle);
-    setStartPos({ x: e.clientX, y: e.clientY, area: { ...cropArea } });
+    startPosRef.current = { x: e.clientX, y: e.clientY, area: { ...cropArea } };
   };
 
-  const onMouseMove = useCallback((e: MouseEvent) => {
+  const updateCropArea = useCallback((clientX: number, clientY: number) => {
     if (!resizing || !editorContainerRef.current) return;
 
     const rect = editorContainerRef.current.getBoundingClientRect();
-    const dx = ((e.clientX - startPos.x) / rect.width) * 100;
-    const dy = ((e.clientY - startPos.y) / rect.height) * 100;
+    const dx = ((clientX - startPosRef.current.x) / rect.width) * 100;
+    const dy = ((clientY - startPosRef.current.y) / rect.height) * 100;
 
-    let newArea = { ...startPos.area };
+    let newArea = { ...startPosRef.current.area };
 
     if (resizing === 'move') {
-      newArea.x = Math.max(0, Math.min(100 - newArea.width, startPos.area.x + dx));
-      newArea.y = Math.max(0, Math.min(100 - newArea.height, startPos.area.y + dy));
+      newArea.x = Math.max(0, Math.min(100 - newArea.width, startPosRef.current.area.x + dx));
+      newArea.y = Math.max(0, Math.min(100 - newArea.height, startPosRef.current.area.y + dy));
     } else {
-      if (resizing.includes('right')) newArea.width = Math.max(5, Math.min(100 - newArea.x, startPos.area.width + dx));
+      if (resizing.includes('right')) newArea.width = Math.max(5, Math.min(100 - newArea.x, startPosRef.current.area.width + dx));
       if (resizing.includes('left')) {
-        const potentialX = startPos.area.x + dx;
-        const potentialW = startPos.area.width - dx;
+        const potentialX = startPosRef.current.area.x + dx;
+        const potentialW = startPosRef.current.area.width - dx;
         if (potentialX >= 0 && potentialW >= 5) {
           newArea.x = potentialX;
           newArea.width = potentialW;
         }
       }
-      if (resizing.includes('bottom')) newArea.height = Math.max(5, Math.min(100 - newArea.y, startPos.area.height + dy));
+      if (resizing.includes('bottom')) newArea.height = Math.max(5, Math.min(100 - newArea.y, startPosRef.current.area.height + dy));
       if (resizing.includes('top')) {
-        const potentialY = startPos.area.y + dy;
-        const potentialH = startPos.area.height - dy;
+        const potentialY = startPosRef.current.area.y + dy;
+        const potentialH = startPosRef.current.area.height - dy;
         if (potentialY >= 0 && potentialH >= 5) {
           newArea.y = potentialY;
           newArea.height = potentialH;
@@ -266,22 +268,63 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
     }
 
     setCropArea(newArea);
-  }, [resizing, startPos]);
+  }, [resizing]);
+
+  const onMouseMove = useCallback((e: MouseEvent) => {
+    if (!resizing) return;
+    
+    if (requestRef.current) {
+      cancelAnimationFrame(requestRef.current);
+    }
+    
+    requestRef.current = requestAnimationFrame(() => {
+      updateCropArea(e.clientX, e.clientY);
+    });
+  }, [resizing, updateCropArea]);
 
   const onMouseUp = useCallback(() => {
     setResizing(null);
+    if (requestRef.current) {
+      cancelAnimationFrame(requestRef.current);
+      requestRef.current = null;
+    }
   }, []);
+
+  const onHandleTouchStart = (e: React.TouchEvent, handle: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const touch = e.touches[0];
+    setResizing(handle);
+    startPosRef.current = { x: touch.clientX, y: touch.clientY, area: { ...cropArea } };
+  };
+
+  const onTouchMove = useCallback((e: TouchEvent) => {
+    if (!resizing) return;
+    const touch = e.touches[0];
+    
+    if (requestRef.current) {
+      cancelAnimationFrame(requestRef.current);
+    }
+    
+    requestRef.current = requestAnimationFrame(() => {
+      updateCropArea(touch.clientX, touch.clientY);
+    });
+  }, [resizing, updateCropArea]);
 
   useEffect(() => {
     if (resizing) {
       window.addEventListener('mousemove', onMouseMove);
       window.addEventListener('mouseup', onMouseUp);
+      window.addEventListener('touchmove', onTouchMove, { passive: false });
+      window.addEventListener('touchend', onMouseUp);
     }
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onMouseUp);
     };
-  }, [resizing, onMouseMove, onMouseUp]);
+  }, [resizing, onMouseMove, onTouchMove, onMouseUp]);
 
   return (
     <div className="max-w-6xl mx-auto space-y-8 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-700">
@@ -514,17 +557,50 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
                       height: `${cropArea.height}%`,
                     }}
                     onMouseDown={(e) => onHandleMouseDown(e, 'move')}
+                    onTouchStart={(e) => onHandleTouchStart(e, 'move')}
                   >
                     {/* Handles */}
-                    <div className="absolute -top-2 -left-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full cursor-nw-resize" onMouseDown={(e) => onHandleMouseDown(e, 'top-left')} />
-                    <div className="absolute -top-2 -right-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full cursor-ne-resize" onMouseDown={(e) => onHandleMouseDown(e, 'top-right')} />
-                    <div className="absolute -bottom-2 -left-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full cursor-sw-resize" onMouseDown={(e) => onHandleMouseDown(e, 'bottom-left')} />
-                    <div className="absolute -bottom-2 -right-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full cursor-se-resize" onMouseDown={(e) => onHandleMouseDown(e, 'bottom-right')} />
+                    <div 
+                      className="absolute -top-2 -left-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full cursor-nw-resize" 
+                      onMouseDown={(e) => onHandleMouseDown(e, 'top-left')}
+                      onTouchStart={(e) => onHandleTouchStart(e, 'top-left')}
+                    />
+                    <div 
+                      className="absolute -top-2 -right-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full cursor-ne-resize" 
+                      onMouseDown={(e) => onHandleMouseDown(e, 'top-right')}
+                      onTouchStart={(e) => onHandleTouchStart(e, 'top-right')}
+                    />
+                    <div 
+                      className="absolute -bottom-2 -left-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full cursor-sw-resize" 
+                      onMouseDown={(e) => onHandleMouseDown(e, 'bottom-left')}
+                      onTouchStart={(e) => onHandleTouchStart(e, 'bottom-left')}
+                    />
+                    <div 
+                      className="absolute -bottom-2 -right-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full cursor-se-resize" 
+                      onMouseDown={(e) => onHandleMouseDown(e, 'bottom-right')}
+                      onTouchStart={(e) => onHandleTouchStart(e, 'bottom-right')}
+                    />
                     
-                    <div className="absolute top-1/2 -left-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full -translate-y-1/2 cursor-w-resize" onMouseDown={(e) => onHandleMouseDown(e, 'left')} />
-                    <div className="absolute top-1/2 -right-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full -translate-y-1/2 cursor-e-resize" onMouseDown={(e) => onHandleMouseDown(e, 'right')} />
-                    <div className="absolute -top-2 left-1/2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full -translate-x-1/2 cursor-n-resize" onMouseDown={(e) => onHandleMouseDown(e, 'top')} />
-                    <div className="absolute -bottom-2 left-1/2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full -translate-x-1/2 cursor-s-resize" onMouseDown={(e) => onHandleMouseDown(e, 'bottom')} />
+                    <div 
+                      className="absolute top-1/2 -left-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full -translate-y-1/2 cursor-w-resize" 
+                      onMouseDown={(e) => onHandleMouseDown(e, 'left')}
+                      onTouchStart={(e) => onHandleTouchStart(e, 'left')}
+                    />
+                    <div 
+                      className="absolute top-1/2 -right-2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full -translate-y-1/2 cursor-e-resize" 
+                      onMouseDown={(e) => onHandleMouseDown(e, 'right')}
+                      onTouchStart={(e) => onHandleTouchStart(e, 'right')}
+                    />
+                    <div 
+                      className="absolute -top-2 left-1/2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full -translate-x-1/2 cursor-n-resize" 
+                      onMouseDown={(e) => onHandleMouseDown(e, 'top')}
+                      onTouchStart={(e) => onHandleTouchStart(e, 'top')}
+                    />
+                    <div 
+                      className="absolute -bottom-2 left-1/2 w-4 h-4 bg-white border-2 border-indigo-500 rounded-full -translate-x-1/2 cursor-s-resize" 
+                      onMouseDown={(e) => onHandleMouseDown(e, 'bottom')}
+                      onTouchStart={(e) => onHandleTouchStart(e, 'bottom')}
+                    />
 
                     {/* Grid Lines */}
                     <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 pointer-events-none opacity-30">
