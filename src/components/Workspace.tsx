@@ -4071,7 +4071,7 @@ if (!this.JSON) { this.JSON = {}; }
     }
   }, [currentUser, selectedFormat]);
 
-  const availableFormats = ['AE Project', 'SVGA 2.0', 'SVGA 2.0 EX', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP (MP4)', 'VAP 1.0.5'];
+  const availableFormats = ['AE Project', 'SVGA 2.0 EX', 'SVGA 2.0', 'Image Sequence', 'GIF (Animation)', 'APNG (Animation)', 'WebM (Video)', 'WebP (Animated)', 'VAP (MP4)', 'VAP 1.0.5'];
   
   const displayedFormats = useMemo(() => {
       // If we are in EX mode, only show SVGA 2.0 EX
@@ -4082,8 +4082,8 @@ if (!this.JSON) { this.JSON = {}; }
           ? currentUser.allowedExportFormat 
           : [currentUser.allowedExportFormat];
       
-      // Always show SVGA 2.0 EX if enabled globally, even if not in allowed formats
-      return availableFormats.filter(f => (allowed.includes(f) || (f === 'SVGA 2.0 EX' && settings?.isSvgaExEnabled)) && !hiddenFormats.includes(f));
+      // Always show SVGA 2.0 and SVGA 2.0 EX if enabled globally, even if not in allowed formats
+      return availableFormats.filter(f => (allowed.includes(f) || (f === 'SVGA 2.0 EX' && settings?.isSvgaExEnabled) || (f === 'SVGA 2.0')) && !hiddenFormats.includes(f));
   }, [currentUser, availableFormats, hiddenFormats, mode, settings?.isSvgaExEnabled]);
 
   useEffect(() => {
