@@ -1,6 +1,6 @@
 import React from 'react';
 import { UserRecord, AppSettings } from '../types';
-import { LogOut, Settings, ShoppingBag, Image, Video, Layers, Wand2, BadgeCheck, Maximize, Lock } from 'lucide-react';
+import { LogOut, Settings, ShoppingBag, Image, Video, Layers, Wand2, BadgeCheck, Maximize, Lock, Scissors } from 'lucide-react';
 
 interface HeaderProps {
   onLogoClick: () => void;
@@ -16,6 +16,7 @@ interface HeaderProps {
   onImageConverterOpen: () => void;
   onImageEditorOpen: () => void;
   onImageMatcherOpen: () => void;
+  onCropperOpen: () => void;
   onSvgaExOpen: () => void;
   onLoginClick: () => void;
   onProfileClick: () => void;
@@ -36,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
   onImageConverterOpen,
   onImageEditorOpen,
   onImageMatcherOpen,
+  onCropperOpen,
   onSvgaExOpen,
   onLoginClick,
   onProfileClick,
@@ -110,6 +112,12 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={onImageMatcherOpen} 
             icon={<Maximize className="w-4 h-4" />}
             label="Image Matcher"
+          />
+          <NavButton 
+            active={currentTab === 'cropper'} 
+            onClick={onCropperOpen} 
+            icon={<Scissors className="w-4 h-4" />}
+            label="القصّ وتحديد المقاس الجماعي"
           />
           <NavButton 
             active={currentTab === 'store'} 

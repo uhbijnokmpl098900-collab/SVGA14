@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { Uploader } from './components/Uploader';
 import { Workspace } from './components/Workspace';
 import { BatchCompressor } from './components/BatchCompressor';
+import { BatchCropper } from './components/BatchCropper';
 import { VideoConverter } from './components/VideoConverter';
 import { ImageToSvga } from './components/ImageToSvga';
 import { ImageEditor } from './components/ImageEditor';
@@ -284,6 +285,7 @@ const App: React.FC = () => {
         onImageConverterOpen={() => handleFeatureAccess(AppState.IMAGE_CONVERTER, 'Image Converter')}
         onImageEditorOpen={() => handleFeatureAccess(AppState.IMAGE_EDITOR, 'Image Editor')}
         onImageMatcherOpen={() => handleFeatureAccess(AppState.IMAGE_MATCHER, 'Image Matcher')}
+        onCropperOpen={() => handleFeatureAccess(AppState.BATCH_CROPPER, 'Batch Cropper')}
         onSvgaExOpen={() => handleFeatureAccess(AppState.SVGA_EDITOR_EX, 'SVGA Editor EX')}
         onLoginClick={() => setShowAuthModal(true)}
         onProfileClick={() => setShowProfileModal(true)}
@@ -294,6 +296,7 @@ const App: React.FC = () => {
           state === AppState.IMAGE_CONVERTER ? 'image-converter' :
           state === AppState.IMAGE_EDITOR ? 'image-editor' :
           state === AppState.IMAGE_MATCHER ? 'image-matcher' :
+          state === AppState.BATCH_CROPPER ? 'cropper' :
           state === AppState.SVGA_EDITOR_EX ? 'svga-ex' :
           'svga'
         }
@@ -366,6 +369,14 @@ const App: React.FC = () => {
             )}
             {state === AppState.IMAGE_MATCHER && (
               <ImageMatcher 
+                currentUser={currentUser} 
+                onCancel={handleReset} 
+                onLoginRequired={() => setShowAuthModal(true)}
+                onSubscriptionRequired={() => setShowSubscriptionModal(true)}
+              />
+            )}
+            {state === AppState.BATCH_CROPPER && (
+              <BatchCropper 
                 currentUser={currentUser} 
                 onCancel={handleReset} 
                 onLoginRequired={() => setShowAuthModal(true)}
