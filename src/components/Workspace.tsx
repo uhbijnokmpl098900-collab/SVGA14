@@ -5166,32 +5166,32 @@ if (!this.JSON) { this.JSON = {}; }
         </div>
       )}
 
-      <div className="flex flex-col sm:flex-row items-center justify-between p-6 sm:p-10 rounded-[3rem] border border-white/5 gap-6 shadow-2xl bg-slate-900/40 backdrop-blur-3xl relative overflow-hidden group">
+      <div className="flex flex-col lg:flex-row items-center justify-between p-4 sm:p-6 lg:p-10 rounded-2xl sm:rounded-[3rem] border border-white/5 gap-4 sm:gap-6 shadow-2xl bg-slate-900/40 backdrop-blur-3xl relative overflow-hidden group">
         <div className="absolute top-0 right-0 w-full h-1 bg-gradient-to-l from-transparent via-sky-500/30 to-transparent"></div>
-        <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-8 text-center sm:text-right">
-          <div className="w-16 h-16 sm:w-20 sm:h-20 bg-gradient-to-br from-sky-400 to-indigo-600 rounded-[2rem] flex items-center justify-center text-white shadow-glow-sky text-3xl">
+        <div className="flex flex-col sm:flex-row items-center gap-4 sm:gap-8 text-center sm:text-right w-full lg:w-auto">
+          <div className="w-12 h-12 sm:w-16 sm:h-16 lg:w-20 lg:h-20 bg-gradient-to-br from-sky-400 to-indigo-600 rounded-xl sm:rounded-[2rem] flex items-center justify-center text-white shadow-glow-sky text-xl sm:text-3xl">
              <span className="drop-shadow-lg animate-pulse">⚛️</span>
           </div>
-          <div>
-            <h2 className="text-xl sm:text-3xl font-black text-white tracking-tight mb-1">{metadata.name}</h2>
+          <div className="flex-1 min-w-0">
+            <h2 className="text-lg sm:text-xl lg:text-3xl font-black text-white tracking-tight mb-1 truncate">{metadata.name}</h2>
             <div className="flex flex-wrap justify-center sm:justify-start items-center gap-2 sm:gap-4">
-               <span className="px-3 py-1 bg-sky-500/10 text-sky-400 text-[10px] font-black rounded-lg border border-sky-500/20 uppercase tracking-[0.2em]">{videoWidth}X{videoHeight}</span>
-               <span className="text-[10px] sm:text-[12px] text-slate-500 font-bold uppercase tracking-[0.3em]">{metadata.frames} إطارات</span>
+               <span className="px-2 py-0.5 sm:px-3 sm:py-1 bg-sky-500/10 text-sky-400 text-[8px] sm:text-[10px] font-black rounded-lg border border-sky-500/20 uppercase tracking-[0.1em] sm:tracking-[0.2em]">{videoWidth}X{videoHeight}</span>
+               <span className="text-[8px] sm:text-[10px] lg:text-[12px] text-slate-500 font-bold uppercase tracking-[0.1em] sm:tracking-[0.3em]">{metadata.frames} إطارات</span>
             </div>
           </div>
         </div>
-        <div className="flex gap-3">
-            <button onClick={() => replaceSvgaInputRef.current?.click()} className="w-full sm:w-auto px-6 py-5 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 hover:text-sky-300 rounded-[2rem] border border-sky-500/20 transition-all font-black uppercase text-[10px] tracking-widest active:scale-95 flex items-center gap-2">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+        <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 w-full lg:w-auto">
+            <button onClick={() => replaceSvgaInputRef.current?.click()} className="flex-1 lg:flex-none px-4 sm:px-6 py-3 sm:py-5 bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 hover:text-sky-300 rounded-xl sm:rounded-[2rem] border border-sky-500/20 transition-all font-black uppercase text-[8px] sm:text-[10px] tracking-widest active:scale-95 flex items-center justify-center gap-2">
+                <svg className="w-3 h-3 sm:w-4 sm:h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                 تغيير ملف SVGA
             </button>
-            <button onClick={onCancel} className="w-full sm:w-auto px-10 py-5 bg-white/5 hover:bg-red-500/10 text-slate-400 hover:text-red-400 rounded-[2rem] border border-white/10 transition-all font-black uppercase text-[10px] tracking-widest active:scale-95">إلغاء المعالجة</button>
+            <button onClick={onCancel} className="flex-1 lg:flex-none px-4 sm:px-10 py-3 sm:py-5 bg-white/5 hover:bg-red-500/10 text-slate-400 hover:text-red-400 rounded-xl sm:rounded-[2rem] border border-white/10 transition-all font-black uppercase text-[8px] sm:text-[10px] tracking-widest active:scale-95">إلغاء المعالجة</button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 sm:gap-8 overflow-visible">
-        <div className="xl:col-span-7 flex flex-col gap-0 overflow-visible">
-          <div className="relative flex items-center justify-center w-full overflow-hidden rounded-[3rem] border border-white/10 shadow-3xl bg-black/20" style={{ height: `${videoHeight * scale}px` }}>
+        <div className="xl:col-span-7 flex flex-col gap-4 sm:gap-0 overflow-visible">
+          <div className="relative flex items-center justify-center w-full overflow-hidden rounded-2xl sm:rounded-[3rem] border border-white/10 shadow-3xl bg-black/20" style={{ height: `${Math.max(200, videoHeight * scale)}px` }}>
               <div ref={containerRef} className="absolute inset-0 flex items-center justify-center transition-transform duration-500 ease-out origin-center pointer-events-none" style={{ transform: `scale(${scale})` }}>
                   <div className="relative overflow-hidden shadow-2xl pointer-events-auto" style={{ 
                       width: `${videoWidth}px`, 
@@ -5278,25 +5278,27 @@ if (!this.JSON) { this.JSON = {}; }
               </div>
           </div>
 
-          <div className="mt-4 w-full bg-slate-950/60 backdrop-blur-3xl p-6 sm:p-8 rounded-[2.5rem] border border-white/5 flex flex-col sm:flex-row items-center gap-6 sm:gap-8 shadow-2xl relative z-20">
-               <button onClick={handlePlayToggle} className="w-16 h-16 bg-sky-500 hover:bg-sky-400 text-white rounded-2xl flex items-center justify-center shadow-glow-sky transition-all active:scale-90">
-                 {isPlaying ? <svg className="w-8 h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M5 4h3v12H5V4zm7 0h3v12h-3V4z"/></svg> : <svg className="w-8 h-8 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M4.5 3.5l11 6.5-11 6.5z"/></svg>}
-               </button>
-               <button onClick={handleDownloadFrame} className="w-16 h-16 bg-white/5 hover:bg-white/10 text-white rounded-2xl flex items-center justify-center border border-white/10 transition-all active:scale-90" title="تنزيل الإطار الحالي">
-                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
-               </button>
+          <div className="mt-4 w-full bg-slate-950/60 backdrop-blur-3xl p-4 sm:p-8 rounded-2xl sm:rounded-[2.5rem] border border-white/5 flex flex-col lg:flex-row items-center gap-4 sm:gap-8 shadow-2xl relative z-20">
+               <div className="flex items-center gap-4 w-full lg:w-auto">
+                 <button onClick={handlePlayToggle} className="w-12 h-12 sm:w-16 sm:h-16 bg-sky-500 hover:bg-sky-400 text-white rounded-xl sm:rounded-2xl flex items-center justify-center shadow-glow-sky transition-all active:scale-90 flex-shrink-0">
+                   {isPlaying ? <svg className="w-6 h-6 sm:w-8 sm:h-8" fill="currentColor" viewBox="0 0 20 20"><path d="M5 4h3v12H5V4zm7 0h3v12h-3V4z"/></svg> : <svg className="w-6 h-6 sm:w-8 sm:h-8 mr-1" fill="currentColor" viewBox="0 0 20 20"><path d="M4.5 3.5l11 6.5-11 6.5z"/></svg>}
+                 </button>
+                 <button onClick={handleDownloadFrame} className="w-12 h-12 sm:w-16 sm:h-16 bg-white/5 hover:bg-white/10 text-white rounded-xl sm:rounded-2xl flex items-center justify-center border border-white/10 transition-all active:scale-90 flex-shrink-0" title="تنزيل الإطار الحالي">
+                     <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                 </button>
+               </div>
                <div className="flex-1 w-full flex flex-col gap-3">
                   <div className="flex justify-between items-center px-1">
                     <div className="flex items-center gap-2">
-                       <span className="text-white font-black text-xs px-3 py-1 bg-white/5 rounded-lg border border-white/5">{currentFrame} / {metadata.frames}</span>
+                       <span className="text-white font-black text-[10px] px-2 py-0.5 sm:px-3 sm:py-1 bg-white/5 rounded-lg border border-white/5">{currentFrame} / {metadata.frames}</span>
                        {audioUrl && (
-                         <span className="flex items-center gap-1 text-[9px] font-black text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20 animate-pulse">
+                         <span className="flex items-center gap-1 text-[8px] sm:text-[9px] font-black text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/20 animate-pulse">
                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" /></svg>
                            صوت نشط
                          </span>
                        )}
                     </div>
-                    <span className="text-slate-600 text-[9px] font-black uppercase tracking-widest">إطار المشهد</span>
+                    <span className="text-slate-600 text-[8px] sm:text-[9px] font-black uppercase tracking-widest">إطار المشهد</span>
                   </div>
                   <div className="relative h-2 flex items-center">
                     <div className="absolute inset-0 h-1 bg-white/5 rounded-full overflow-hidden">
@@ -5317,17 +5319,17 @@ if (!this.JSON) { this.JSON = {}; }
         </div>
 
         <div className="xl:col-span-5 flex flex-col gap-6 h-auto xl:h-[800px]">
-          <div className="flex bg-slate-950/80 p-1 rounded-3xl border border-white/5">
-              <button onClick={() => setActiveSideTab('layers')} className={`flex-1 py-3 rounded-2xl text-[9px] font-black uppercase transition-all ${activeSideTab === 'layers' ? 'bg-sky-500 text-white shadow-glow-sky' : 'text-slate-500'}`}>الطبقات</button>
-              <button onClick={() => setActiveSideTab('transforms')} className={`flex-1 py-3 rounded-2xl text-[9px] font-black uppercase transition-all ${activeSideTab === 'transforms' ? 'bg-sky-500 text-white shadow-glow-sky' : 'text-slate-500'}`}>التحويلات</button>
-              <button onClick={() => setActiveSideTab('bg')} className={`flex-1 py-3 rounded-2xl text-[9px] font-black uppercase transition-all ${activeSideTab === 'bg' ? 'bg-sky-500 text-white shadow-glow-sky' : 'text-slate-500'}`}>الخلفية</button>
-              <button onClick={() => setActiveSideTab('optimize')} className={`flex-1 py-3 rounded-2xl text-[9px] font-black uppercase transition-all ${activeSideTab === 'optimize' ? 'bg-emerald-500 text-white shadow-glow-emerald' : 'text-slate-500'}`}>ضغط الحجم</button>
+          <div className="flex bg-slate-950/80 p-1 rounded-2xl sm:rounded-3xl border border-white/5 overflow-x-auto custom-scrollbar no-scrollbar">
+              <button onClick={() => setActiveSideTab('layers')} className={`flex-shrink-0 px-4 py-3 rounded-xl sm:rounded-2xl text-[8px] sm:text-[9px] font-black uppercase transition-all ${activeSideTab === 'layers' ? 'bg-sky-500 text-white shadow-glow-sky' : 'text-slate-500'}`}>الطبقات</button>
+              <button onClick={() => setActiveSideTab('transforms')} className={`flex-shrink-0 px-4 py-3 rounded-xl sm:rounded-2xl text-[8px] sm:text-[9px] font-black uppercase transition-all ${activeSideTab === 'transforms' ? 'bg-sky-500 text-white shadow-glow-sky' : 'text-slate-500'}`}>التحويلات</button>
+              <button onClick={() => setActiveSideTab('bg')} className={`flex-shrink-0 px-4 py-3 rounded-xl sm:rounded-2xl text-[8px] sm:text-[9px] font-black uppercase transition-all ${activeSideTab === 'bg' ? 'bg-sky-500 text-white shadow-glow-sky' : 'text-slate-500'}`}>الخلفية</button>
+              <button onClick={() => setActiveSideTab('optimize')} className={`flex-shrink-0 px-4 py-3 rounded-xl sm:rounded-2xl text-[8px] sm:text-[9px] font-black uppercase transition-all ${activeSideTab === 'optimize' ? 'bg-emerald-500 text-white shadow-glow-emerald' : 'text-slate-500'}`}>ضغط الحجم</button>
               {currentUser?.role === 'admin' && (
-                <button onClick={() => setActiveSideTab('settings')} className={`flex-1 py-3 rounded-2xl text-[9px] font-black uppercase transition-all ${activeSideTab === 'settings' ? 'bg-purple-500 text-white shadow-glow-purple' : 'text-slate-500'}`}>الإعدادات</button>
+                <button onClick={() => setActiveSideTab('settings')} className={`flex-shrink-0 px-4 py-3 rounded-xl sm:rounded-2xl text-[8px] sm:text-[9px] font-black uppercase transition-all ${activeSideTab === 'settings' ? 'bg-purple-500 text-white shadow-glow-purple' : 'text-slate-500'}`}>الإعدادات</button>
               )}
           </div>
 
-          <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-950/80 rounded-[3rem] p-6 border border-white/5 shadow-3xl">
+          <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-950/80 rounded-2xl sm:rounded-[3rem] p-4 sm:p-6 border border-white/5 shadow-3xl">
               {activeSideTab === 'layers' && (
                 <div className="space-y-6 animate-in fade-in duration-300">
                     <div className="flex justify-between items-center mb-6">

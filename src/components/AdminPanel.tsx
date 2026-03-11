@@ -287,18 +287,18 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
         </button>
       </div>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-col lg:flex-row flex-1 overflow-hidden">
         {/* Sidebar */}
-        <div className="w-64 bg-slate-950/50 border-l border-white/10 flex flex-col p-4 gap-2">
+        <div className="w-full lg:w-64 bg-slate-950/50 border-b lg:border-b-0 lg:border-l border-white/10 flex flex-row lg:flex-col p-2 sm:p-4 gap-1 sm:gap-2 overflow-x-auto custom-scrollbar no-scrollbar">
           <NavButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users />} label="المستخدمين" />
           <NavButton active={activeTab === 'keys'} onClick={() => setActiveTab('keys')} icon={<Key />} label="الاشتراكات" />
-          <NavButton active={activeTab === 'assets'} onClick={() => setActiveTab('assets')} icon={<ImageIcon />} label="الوسائط والخلفيات" />
+          <NavButton active={activeTab === 'assets'} onClick={() => setActiveTab('assets')} icon={<ImageIcon />} label="الوسائط" />
           <NavButton active={activeTab === 'records'} onClick={() => setActiveTab('records')} icon={<FileText />} label="السجلات" />
-          <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<SettingsIcon />} label="الإعدادات العامة" />
+          <NavButton active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} icon={<SettingsIcon />} label="الإعدادات" />
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 custom-scrollbar">
           {loading ? (
             <div className="flex items-center justify-center h-full">
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
@@ -811,13 +811,13 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
 const NavButton: React.FC<{ active: boolean; onClick: () => void; icon: React.ReactNode; label: string }> = ({ active, onClick, icon, label }) => (
   <button
     onClick={onClick}
-    className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
+    className={`flex-shrink-0 lg:w-full flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 sm:py-3 rounded-lg transition-all ${
       active 
         ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20' 
         : 'text-slate-400 hover:bg-white/5 hover:text-white'
     }`}
   >
-    {React.cloneElement(icon as React.ReactElement, { className: 'w-5 h-5' })}
-    <span className="font-medium">{label}</span>
+    {React.cloneElement(icon as React.ReactElement, { className: 'w-4 h-4 sm:w-5 sm:h-5' })}
+    <span className="font-medium text-xs sm:text-sm whitespace-nowrap">{label}</span>
   </button>
 );
