@@ -3,7 +3,7 @@ import { Header } from './components/Header';
 import { Uploader } from './components/Uploader';
 import { Workspace } from './components/Workspace';
 import { BatchCompressor } from './components/BatchCompressor';
-// import { BatchCropper } from './components/BatchCropper';
+import { BatchCropper } from './components/BatchCropper';
 import { VideoConverter } from './components/VideoConverter';
 import { ImageToSvga } from './components/ImageToSvga';
 import { ImageEditor } from './components/ImageEditor';
@@ -375,14 +375,14 @@ const App: React.FC = () => {
                 onSubscriptionRequired={() => setShowSubscriptionModal(true)}
               />
             )}
-            {/* {state === AppState.BATCH_CROPPER && (
+            {state === AppState.BATCH_CROPPER && (
               <BatchCropper 
                 currentUser={currentUser} 
                 onCancel={handleReset} 
                 onLoginRequired={() => setShowAuthModal(true)}
                 onSubscriptionRequired={() => setShowSubscriptionModal(true)}
               />
-            )} */}
+            )}
             {state === AppState.ADMIN_PANEL && currentUser?.role === 'admin' && (
               <AdminPanel currentUser={currentUser} onCancel={handleReset} />
             )}
