@@ -15,6 +15,7 @@ export const handleSvgaExExport = async (params: {
     svgaPos: { x: number, y: number },
     layerImages: Record<string, string>,
     assetColors: Record<string, string>,
+    assetColorModes: Record<string, 'tint' | 'fill'>,
     deletedKeys: Set<string>,
     customLayers: any[],
     watermark: string | null,
@@ -33,7 +34,7 @@ export const handleSvgaExExport = async (params: {
 }) => {
     const {
         metadata, videoWidth, videoHeight, exportScale, svgaScale, svgaPos,
-        layerImages, assetColors, deletedKeys, customLayers, watermark,
+        layerImages, assetColors, assetColorModes, deletedKeys, customLayers, watermark,
         wmScale, wmPos, audioUrl, audioFile, originalAudioUrl, fadeConfig,
         applyTransparencyEffects, setProgress, setExportPhase, setIsExporting,
         protobuf, globalQuality
@@ -171,12 +172,25 @@ export const handleSvgaExExport = async (params: {
                 canvas.height = Math.floor(img.height * targetScale);
                 const ctx = canvas.getContext('2d');
                 if (ctx) {
-                    if (hasColorTint) {
-                        ctx.shadowColor = assetColors[key];
-                        ctx.shadowBlur = 2;
-                        ctx.shadowOffsetX = 0; ctx.shadowOffsetY = 0;
-                    }
                     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                    if (hasColorTint) {
+                        const color = assetColors[key];
+                        const mode = assetColorModes[key] || 'tint';
+                        
+                        if (mode === 'fill') {
+                            ctx.globalCompositeOperation = 'source-in';
+                            ctx.fillStyle = color;
+                            ctx.fillRect(0, 0, canvas.width, canvas.height);
+                        } else {
+                            ctx.globalCompositeOperation = 'multiply';
+                            ctx.fillStyle = color;
+                            ctx.fillRect(0, 0, canvas.width, canvas.height);
+                            ctx.globalCompositeOperation = 'destination-in';
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        }
+                        ctx.globalCompositeOperation = 'source-over';
+                    }
                     
                     // Apply color levels reduction if quality is low
                     if (needsQualityCompression) {

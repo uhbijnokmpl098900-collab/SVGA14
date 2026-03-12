@@ -1970,14 +1970,25 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
               
               const ctx = canvas.getContext('2d');
               if (ctx) {
-                  if (hasColorTint) {
-                      ctx.shadowColor = assetColors[key];
-                      ctx.shadowBlur = 2;
-                      ctx.shadowOffsetX = 0;
-                      ctx.shadowOffsetY = 0;
-                  }
-
                   ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                  if (hasColorTint) {
+                      const color = assetColors[key];
+                      const mode = assetColorModes[key] || 'tint';
+                      
+                      if (mode === 'fill') {
+                          ctx.globalCompositeOperation = 'source-in';
+                          ctx.fillStyle = color;
+                          ctx.fillRect(0, 0, canvas.width, canvas.height);
+                      } else {
+                          ctx.globalCompositeOperation = 'multiply';
+                          ctx.fillStyle = color;
+                          ctx.fillRect(0, 0, canvas.width, canvas.height);
+                          ctx.globalCompositeOperation = 'destination-in';
+                          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                      }
+                      ctx.globalCompositeOperation = 'source-over';
+                  }
                   
                   if (isEdgeFadeActive) {
                       applyTransparencyEffects(ctx, canvas.width, canvas.height);
@@ -4145,7 +4156,7 @@ if (!this.JSON) { this.JSON = {}; }
     else if (currentFormat === 'SVGA 2.0 EX') {
         await handleSvgaExExport({
             metadata, videoWidth, videoHeight, exportScale, svgaScale, svgaPos,
-            layerImages, assetColors, deletedKeys, customLayers, watermark,
+            layerImages, assetColors, assetColorModes, deletedKeys, customLayers, watermark,
             wmScale, wmPos, audioUrl, audioFile, originalAudioUrl, fadeConfig,
             applyTransparencyEffects, setProgress, setExportPhase, setIsExporting,
             protobuf, globalQuality
@@ -4623,14 +4634,25 @@ if (!this.JSON) { this.JSON = {}; }
                         
                         const ctx = canvas.getContext('2d');
                         if (ctx) {
-                            if (hasColorTint) {
-                                ctx.shadowColor = assetColors[key];
-                                ctx.shadowBlur = 2;
-                                ctx.shadowOffsetX = 0;
-                                ctx.shadowOffsetY = 0;
-                            }
-
                             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                            if (hasColorTint) {
+                                const color = assetColors[key];
+                                const mode = assetColorModes[key] || 'tint';
+                                
+                                if (mode === 'fill') {
+                                    ctx.globalCompositeOperation = 'source-in';
+                                    ctx.fillStyle = color;
+                                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                                } else {
+                                    ctx.globalCompositeOperation = 'multiply';
+                                    ctx.fillStyle = color;
+                                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                                    ctx.globalCompositeOperation = 'destination-in';
+                                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                                }
+                                ctx.globalCompositeOperation = 'source-over';
+                            }
                             
                             if (isEdgeFadeActive) {
                                 applyTransparencyEffects(ctx, canvas.width, canvas.height);
@@ -4901,14 +4923,25 @@ if (!this.JSON) { this.JSON = {}; }
                         
                         const ctx = canvas.getContext('2d');
                         if (ctx) {
-                            if (hasColorTint) {
-                                ctx.shadowColor = assetColors[key];
-                                ctx.shadowBlur = 2;
-                                ctx.shadowOffsetX = 0;
-                                ctx.shadowOffsetY = 0;
-                            }
-
                             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+                            if (hasColorTint) {
+                                const color = assetColors[key];
+                                const mode = assetColorModes[key] || 'tint';
+                                
+                                if (mode === 'fill') {
+                                    ctx.globalCompositeOperation = 'source-in';
+                                    ctx.fillStyle = color;
+                                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                                } else {
+                                    ctx.globalCompositeOperation = 'multiply';
+                                    ctx.fillStyle = color;
+                                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                                    ctx.globalCompositeOperation = 'destination-in';
+                                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                                }
+                                ctx.globalCompositeOperation = 'source-over';
+                            }
                             
                             if (isEdgeFadeActive) {
                                 applyTransparencyEffects(ctx, canvas.width, canvas.height);
