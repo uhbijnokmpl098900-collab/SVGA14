@@ -8,9 +8,31 @@ import {
   signOut,
   updateProfile
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { UserRecord } from '../types';
+
+// Helper to get or generate device ID
+const getDeviceId = () => {
+  let id = localStorage.getItem('deviceId');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('deviceId', id);
+  }
+  return id;
+};
+
+// Helper to get client IP
+const getClientIp = async () => {
+  try {
+    const res = await fetch('/api/ip');
+    const data = await res.json();
+    return data.ip;
+  } catch (e) {
+    console.warn("Could not fetch IP:", e);
+    return 'unknown';
+  }
+};
 
 interface AuthContextType {
   currentUser: UserRecord | null;
@@ -44,6 +66,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (user) {
         // Default user data from Auth
         const isAdmin = user.email === 'admin@demo.com' || user.email === 'aegy238@gmail.com';
+        const deviceId = getDeviceId();
+        const ip = await getClientIp();
         
         const basicUserData: UserRecord = {
           id: user.uid,
@@ -58,14 +82,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           coins: 0,
           subscriptionExpiry: new Date(),
           createdAt: new Date(),
-          lastLogin: new Date()
+          lastLogin: new Date(),
+          deviceId,
+          lastIp: ip
         };
 
         // Listen for real-time updates to the user document
         const userDocRef = doc(db, 'users', user.uid);
         unsubscribeDoc = onSnapshot(userDocRef, (docSnap) => {
           if (docSnap.exists()) {
-            setCurrentUser({ id: user.uid, ...docSnap.data() } as UserRecord);
+            const data = docSnap.data();
+            // Update IP and Device ID if they changed or are missing
+            if (data.deviceId !== deviceId || data.lastIp !== ip) {
+              updateDoc(userDocRef, { deviceId, lastIp: ip, lastLogin: new Date() }).catch(e => console.warn("Failed to update user metadata:", e));
+            }
+            setCurrentUser({ id: user.uid, ...data } as UserRecord);
           } else {
             // If doc doesn't exist, try to create it once
             setDoc(userDocRef, basicUserData).then(() => {
@@ -103,6 +134,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     
     // Create user document in Firestore
     const isAdmin = email === 'admin@demo.com' || email === 'aegy238@gmail.com';
+    const deviceId = getDeviceId();
+    const ip = await getClientIp();
     
     let defaultFreeAttempts = 5;
     try {
@@ -127,7 +160,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       coins: 0,
       subscriptionExpiry: new Date(),
       createdAt: new Date(),
-      lastLogin: new Date()
+      lastLogin: new Date(),
+      deviceId,
+      lastIp: ip
     };
     
     try {

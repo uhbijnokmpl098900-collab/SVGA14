@@ -3,7 +3,7 @@ import { UserRecord, AppSettings, LicenseKey, PresetBackground, SubscriptionType
 import { db, storage } from '../lib/firebase';
 import { collection, getDocs, doc, updateDoc, addDoc, deleteDoc, query, orderBy, Timestamp, setDoc, getDoc, limit } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
-import { Users, Key, Image as ImageIcon, Settings as SettingsIcon, Trash2, Ban, CheckCircle, Upload, RefreshCw, X, FileText, Link as LinkIcon, BadgeCheck } from 'lucide-react';
+import { Users, Key, Image as ImageIcon, Settings as SettingsIcon, Trash2, Ban, CheckCircle, Upload, RefreshCw, X, FileText, Link as LinkIcon, BadgeCheck, Wifi, Smartphone } from 'lucide-react';
 
 interface AdminPanelProps {
   currentUser: UserRecord | null;
@@ -17,6 +17,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
   const [dropdownState, setDropdownState] = useState<{ userId: string; x: number; y: number; position: 'top' | 'bottom' } | null>(null);
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<UserRecord[]>([]);
+  const [bannedIps, setBannedIps] = useState<string[]>([]);
+  const [bannedDevices, setBannedDevices] = useState<string[]>([]);
   const [keys, setKeys] = useState<LicenseKey[]>([]);
   const [backgrounds, setBackgrounds] = useState<PresetBackground[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -39,6 +41,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
         const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
         const snapshot = await getDocs(q);
         setUsers(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as UserRecord)));
+
+        // Fetch banned IPs and Devices
+        const [ipSnap, deviceSnap] = await Promise.all([
+          getDocs(collection(db, 'banned_ips')),
+          getDocs(collection(db, 'banned_devices'))
+        ]);
+        setBannedIps(ipSnap.docs.map(d => d.data().ip));
+        setBannedDevices(deviceSnap.docs.map(d => d.id));
       } else if (activeTab === 'keys') {
         const q = query(collection(db, 'licenseKeys'), orderBy('createdAt', 'desc'));
         const snapshot = await getDocs(q);
@@ -72,14 +82,68 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
   };
 
   // ... (User Management)
-  const handleBanUser = async (userId: string, currentStatus: string) => {
+  const handleBanUser = async (user: UserRecord) => {
     if (!confirm('هل أنت متأكد من تغيير حالة هذا المستخدم؟')) return;
     try {
-      const newStatus = currentStatus === 'banned' ? 'active' : 'banned';
-      await updateDoc(doc(db, 'users', userId), { status: newStatus });
-      setUsers(users.map(u => u.id === userId ? { ...u, status: newStatus as any } : u));
+      const newStatus = user.status === 'banned' ? 'active' : 'banned';
+      await updateDoc(doc(db, 'users', user.id), { status: newStatus });
+      
+      // Also track in banned_emails to prevent re-registration
+      if (user.email) {
+        const emailDocId = user.email.toLowerCase().replace(/\./g, '_');
+        if (newStatus === 'banned') {
+          await setDoc(doc(db, 'banned_emails', emailDocId), {
+            email: user.email.toLowerCase(),
+            userId: user.id,
+            bannedAt: Timestamp.now()
+          });
+        } else {
+          await deleteDoc(doc(db, 'banned_emails', emailDocId));
+        }
+      }
+
+      setUsers(users.map(u => u.id === user.id ? { ...u, status: newStatus as any } : u));
     } catch (error) {
       console.error("Error updating user:", error);
+    }
+  };
+
+  const handleBanIp = async (ip: string | undefined) => {
+    if (!ip) return alert("لا يوجد عنوان IP لهذا المستخدم");
+    const ipDocId = ip.replace(/\./g, '_');
+    const isBanned = bannedIps.includes(ip);
+    
+    if (!confirm(isBanned ? 'هل تريد فك حظر هذه الشبكة؟' : 'هل تريد حظر هذه الشبكة بالكامل؟')) return;
+
+    try {
+      if (isBanned) {
+        await deleteDoc(doc(db, 'banned_ips', ipDocId));
+        setBannedIps(bannedIps.filter(i => i !== ip));
+      } else {
+        await setDoc(doc(db, 'banned_ips', ipDocId), { ip, bannedAt: Timestamp.now() });
+        setBannedIps([...bannedIps, ip]);
+      }
+    } catch (e) {
+      console.error("IP Ban error:", e);
+    }
+  };
+
+  const handleBanDevice = async (deviceId: string | undefined) => {
+    if (!deviceId) return alert("لا يوجد معرف جهاز لهذا المستخدم");
+    const isBanned = bannedDevices.includes(deviceId);
+    
+    if (!confirm(isBanned ? 'هل تريد فك حظر هذا الجهاز؟' : 'هل تريد حظر هذا الجهاز بالكامل؟')) return;
+
+    try {
+      if (isBanned) {
+        await deleteDoc(doc(db, 'banned_devices', deviceId));
+        setBannedDevices(bannedDevices.filter(d => d !== deviceId));
+      } else {
+        await setDoc(doc(db, 'banned_devices', deviceId), { bannedAt: Timestamp.now() });
+        setBannedDevices([...bannedDevices, deviceId]);
+      }
+    } catch (e) {
+      console.error("Device Ban error:", e);
     }
   };
 
@@ -339,11 +403,25 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
                             </td>
                             <td className="p-3 flex gap-2">
                               <button 
-                                onClick={() => handleBanUser(user.id, user.status)}
+                                onClick={() => handleBanUser(user)}
                                 className="p-1.5 hover:bg-red-500/20 text-red-400 rounded transition-colors"
                                 title={user.status === 'active' ? 'حظر' : 'فك الحظر'}
                               >
                                 <Ban className="w-4 h-4" />
+                              </button>
+                              <button 
+                                onClick={() => handleBanIp(user.lastIp)}
+                                className={`p-1.5 rounded transition-colors ${bannedIps.includes(user.lastIp || '') ? 'bg-red-500 text-white' : 'hover:bg-red-500/20 text-red-400'}`}
+                                title={bannedIps.includes(user.lastIp || '') ? 'فك حظر الشبكة' : 'حظر الشبكة (IP)'}
+                              >
+                                <Wifi className="w-4 h-4" />
+                              </button>
+                              <button 
+                                onClick={() => handleBanDevice(user.deviceId)}
+                                className={`p-1.5 rounded transition-colors ${bannedDevices.includes(user.deviceId || '') ? 'bg-red-500 text-white' : 'hover:bg-red-500/20 text-red-400'}`}
+                                title={bannedDevices.includes(user.deviceId || '') ? 'فك حظر الجهاز' : 'حظر الجهاز'}
+                              >
+                                <Smartphone className="w-4 h-4" />
                               </button>
                               <button 
                                 onClick={() => handleDeleteUser(user.id)}

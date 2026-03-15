@@ -46,6 +46,8 @@ interface CropArea {
   height: number;
 }
 
+type CropShape = 'rect' | 'circle' | 'rounded';
+
 export const BatchCropper: React.FC<BatchCropperProps> = ({ 
   currentUser, 
   onCancel, 
@@ -59,6 +61,8 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
   const [progress, setProgress] = useState(0);
   const [editingImage, setEditingImage] = useState<CroppableImage | null>(null);
   const [cropArea, setCropArea] = useState<CropArea>({ x: 10, y: 10, width: 80, height: 80 }); // Percentage based
+  const [cropShape, setCropShape] = useState<CropShape>('rect');
+  const [borderRadius, setBorderRadius] = useState(20); // For rounded rect
   const [format, setFormat] = useState<'png' | 'jpeg' | 'webp'>('png');
   const [quality, setQuality] = useState(0.9);
   
@@ -137,7 +141,7 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
       setImages([...processedImages]);
 
       try {
-        const blob = await cropImage(imgData.url, cropArea, format, quality);
+        const blob = await cropImage(imgData.url, cropArea, format, quality, cropShape, borderRadius);
         processedImages[i] = { 
           ...processedImages[i], 
           status: 'completed', 
@@ -158,7 +162,7 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
     }
   };
 
-  const cropImage = (url: string, area: CropArea, format: string, quality: number): Promise<Blob | null> => {
+  const cropImage = (url: string, area: CropArea, format: string, quality: number, shape: CropShape, radius: number): Promise<Blob | null> => {
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
@@ -180,6 +184,27 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
         
         ctx.imageSmoothingEnabled = true;
         ctx.imageSmoothingQuality = 'high';
+
+        // Apply Shape Mask
+        ctx.beginPath();
+        if (shape === 'circle') {
+          const size = Math.min(w, h);
+          ctx.arc(w / 2, h / 2, size / 2, 0, Math.PI * 2);
+          ctx.clip();
+        } else if (shape === 'rounded') {
+          const r = (radius / 100) * Math.min(w, h);
+          ctx.moveTo(r, 0);
+          ctx.lineTo(w - r, 0);
+          ctx.quadraticCurveTo(w, 0, w, r);
+          ctx.lineTo(w, h - r);
+          ctx.quadraticCurveTo(w, h, w - r, h);
+          ctx.lineTo(r, h);
+          ctx.quadraticCurveTo(0, h, 0, h - r);
+          ctx.lineTo(0, r);
+          ctx.quadraticCurveTo(0, 0, r, 0);
+          ctx.clip();
+        }
+        
         ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
         
         canvas.toBlob((blob) => {
@@ -264,6 +289,13 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
           newArea.y = potentialY;
           newArea.height = potentialH;
         }
+      }
+
+      // Force perfect circle aspect ratio if shape is circle
+      if (cropShape === 'circle') {
+        const size = Math.min(newArea.width, newArea.height);
+        newArea.width = size;
+        newArea.height = size;
       }
     }
 
@@ -374,6 +406,12 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
                 <div className="flex items-center justify-between text-[10px] font-bold">
                   <span className="text-slate-400">الإزاحة:</span>
                   <span className="text-indigo-400 font-mono">X: {Math.round(cropArea.x)}% Y: {Math.round(cropArea.y)}%</span>
+                </div>
+                <div className="flex items-center justify-between text-[10px] font-bold pt-2 border-t border-white/5">
+                  <span className="text-slate-400">الشكل المختار:</span>
+                  <span className="text-indigo-400">
+                    {cropShape === 'rect' ? 'مربع' : cropShape === 'circle' ? 'دائري' : 'حواف دائرية'}
+                  </span>
                 </div>
               </div>
 
@@ -549,12 +587,13 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
 
                   {/* Crop Box */}
                   <div 
-                    className="absolute border-2 border-indigo-500 shadow-[0_0_0_9999px_rgba(0,0,0,0.4)] cursor-move"
+                    className="absolute border-2 border-indigo-500 shadow-[0_0_0_9999px_rgba(0,0,0,0.4)] cursor-move overflow-hidden"
                     style={{
                       left: `${cropArea.x}%`,
                       top: `${cropArea.y}%`,
                       width: `${cropArea.width}%`,
                       height: `${cropArea.height}%`,
+                      borderRadius: cropShape === 'circle' ? '50%' : cropShape === 'rounded' ? `${borderRadius}%` : '0',
                     }}
                     onMouseDown={(e) => onHandleMouseDown(e, 'move')}
                     onTouchStart={(e) => onHandleTouchStart(e, 'move')}
@@ -614,14 +653,126 @@ export const BatchCropper: React.FC<BatchCropperProps> = ({
                 </div>
               </div>
 
-              <div className="p-8 bg-slate-900/80 border-t border-white/5 flex items-center justify-between">
-                <div className="text-slate-400 text-xs">
-                  <p>اسحب الإطار لتحديد منطقة القصّ.</p>
-                  <p className="mt-1">سيتم تطبيق هذا الإطار على جميع الصور المرفوعة.</p>
+              <div className="p-8 bg-slate-900/80 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-6">
+                <div className="flex flex-col gap-4 w-full sm:w-auto">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500">شكل القصّ</span>
+                  <div className="flex gap-2">
+                    {[
+                      { id: 'rect', label: 'مربع', icon: '🔲' },
+                      { id: 'circle', label: 'دائري', icon: '⚪' },
+                      { id: 'rounded', label: 'حواف دائرية', icon: '▢' },
+                    ].map(s => (
+                      <button
+                        key={s.id}
+                        onClick={() => {
+                          setCropShape(s.id as CropShape);
+                          if (s.id === 'circle') {
+                            const size = Math.min(cropArea.width, cropArea.height);
+                            setCropArea(prev => ({ ...prev, width: size, height: size }));
+                          }
+                        }}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-[10px] font-black transition-all border ${cropShape === s.id ? 'bg-indigo-500 border-indigo-400 text-white shadow-glow-indigo' : 'bg-white/5 border-white/5 text-slate-400 hover:bg-white/10'}`}
+                      >
+                        <span className="text-sm">{s.icon}</span>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4 bg-white/5 p-4 rounded-2xl border border-white/5">
+                    {/* Size Controls */}
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[9px] text-slate-400 font-bold">العرض:</span>
+                        <span className="text-[9px] text-indigo-400 font-mono">{Math.round(cropArea.width)}%</span>
+                      </div>
+                      <input 
+                        type="range" min="5" max="100" 
+                        value={cropArea.width} 
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setCropArea(prev => {
+                            const newWidth = Math.min(val, 100 - prev.x);
+                            const next = { ...prev, width: newWidth };
+                            if (cropShape === 'circle') next.height = newWidth;
+                            return next;
+                          });
+                        }}
+                        className="w-full h-1.5 bg-slate-800 rounded-full appearance-none accent-indigo-500 cursor-pointer"
+                      />
+                    </div>
+
+                    {cropShape !== 'circle' && (
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[9px] text-slate-400 font-bold">الطول:</span>
+                          <span className="text-[9px] text-indigo-400 font-mono">{Math.round(cropArea.height)}%</span>
+                        </div>
+                        <input 
+                          type="range" min="5" max="100" 
+                          value={cropArea.height} 
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value);
+                            setCropArea(prev => ({ ...prev, height: Math.min(val, 100 - prev.y) }));
+                          }}
+                          className="w-full h-1.5 bg-slate-800 rounded-full appearance-none accent-indigo-500 cursor-pointer"
+                        />
+                      </div>
+                    )}
+
+                    {/* Position Controls */}
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[9px] text-slate-400 font-bold">الموقع الأفقي (X):</span>
+                        <span className="text-[9px] text-indigo-400 font-mono">{Math.round(cropArea.x)}%</span>
+                      </div>
+                      <input 
+                        type="range" min="0" max="100" 
+                        value={cropArea.x} 
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setCropArea(prev => ({ ...prev, x: Math.min(val, 100 - prev.width) }));
+                        }}
+                        className="w-full h-1.5 bg-slate-800 rounded-full appearance-none accent-indigo-500 cursor-pointer"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[9px] text-slate-400 font-bold">الموقع الرأسي (Y):</span>
+                        <span className="text-[9px] text-indigo-400 font-mono">{Math.round(cropArea.y)}%</span>
+                      </div>
+                      <input 
+                        type="range" min="0" max="100" 
+                        value={cropArea.y} 
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setCropArea(prev => ({ ...prev, y: Math.min(val, 100 - prev.height) }));
+                        }}
+                        className="w-full h-1.5 bg-slate-800 rounded-full appearance-none accent-indigo-500 cursor-pointer"
+                      />
+                    </div>
+
+                    {cropShape === 'rounded' && (
+                      <div className="col-span-full flex items-center gap-4 bg-white/5 p-3 rounded-xl border border-white/5">
+                        <span className="text-[9px] text-slate-400 font-bold whitespace-nowrap">نصف قطر الحواف:</span>
+                        <input 
+                          type="range" 
+                          min="1" 
+                          max="50" 
+                          value={borderRadius} 
+                          onChange={(e) => setBorderRadius(parseInt(e.target.value))}
+                          className="flex-1 h-1.5 bg-slate-800 rounded-full appearance-none accent-indigo-500 cursor-pointer"
+                        />
+                        <span className="text-[9px] text-indigo-400 font-mono">{borderRadius}%</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
+
                 <button 
                   onClick={() => setEditingImage(null)}
-                  className="px-8 py-4 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl font-black text-sm shadow-glow-indigo transition-all active:scale-95 flex items-center gap-2"
+                  className="px-8 py-4 bg-indigo-500 hover:bg-indigo-400 text-white rounded-2xl font-black text-sm shadow-glow-indigo transition-all active:scale-95 flex items-center gap-2 w-full sm:w-auto justify-center"
                 >
                   <Check className="w-5 h-5" />
                   حفظ منطقة القصّ

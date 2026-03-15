@@ -34,6 +34,8 @@ const App: React.FC = () => {
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isLoginView, setIsLoginView] = useState(true);
+  const [isBannedByIpOrDevice, setIsBannedByIpOrDevice] = useState(false);
+  const [banType, setBanType] = useState<'ip' | 'device' | 'both' | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [showProfileModal, setShowProfileModal] = useState(false);
@@ -52,6 +54,40 @@ const App: React.FC = () => {
     setShowOnboarding(false);
     localStorage.setItem('hasSeenOnboarding', 'true');
   };
+
+  useEffect(() => {
+    // Check for IP or Device Ban
+    const checkBans = async () => {
+      try {
+        // Get IP
+        const ipRes = await fetch('/api/ip');
+        const { ip } = await ipRes.json();
+        const ipDocId = ip.replace(/\./g, '_');
+        
+        // Get Device ID
+        const deviceId = localStorage.getItem('deviceId');
+        
+        const [ipBan, deviceBan] = await Promise.all([
+          getDoc(doc(db, 'banned_ips', ipDocId)),
+          deviceId ? getDoc(doc(db, 'banned_devices', deviceId)) : Promise.resolve({ exists: () => false })
+        ]);
+
+        if (ipBan.exists() && deviceBan.exists()) {
+          setIsBannedByIpOrDevice(true);
+          setBanType('both');
+        } else if (ipBan.exists()) {
+          setIsBannedByIpOrDevice(true);
+          setBanType('ip');
+        } else if (deviceBan.exists()) {
+          setIsBannedByIpOrDevice(true);
+          setBanType('device');
+        }
+      } catch (e) {
+        console.error("Ban check error:", e);
+      }
+    };
+    checkBans();
+  }, []);
 
   useEffect(() => {
     // Load Global Settings
@@ -256,6 +292,53 @@ const App: React.FC = () => {
 
   if (loading) {
     return <Loading />;
+  }
+
+  // Check if user is banned by IP or Device
+  if (isBannedByIpOrDevice) {
+    return (
+      <div className="min-h-screen bg-[#020617] flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-slate-900/40 backdrop-blur-xl border border-red-500/20 rounded-3xl p-8 text-center shadow-2xl">
+          <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <h2 className="text-3xl font-black text-white mb-4 tracking-tight">تم حظر الوصول</h2>
+          <p className="text-slate-400 mb-8 leading-relaxed">
+            {banType === 'ip' && "عذراً، تم حظر هذه الشبكة من الوصول للمنصة."}
+            {banType === 'device' && "عذراً، تم حظر هذا الجهاز من الوصول للمنصة."}
+            {banType === 'both' && "عذراً، تم حظر هذا الجهاز والشبكة من الوصول للمنصة."}
+            {" يرجى التواصل مع الدعم الفني للمزيد من المعلومات."}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if user is banned
+  if (currentUser?.status === 'banned') {
+    return (
+      <div className="min-h-screen bg-[#020617] flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-slate-900/40 backdrop-blur-xl border border-red-500/20 rounded-3xl p-8 text-center shadow-2xl">
+          <div className="w-20 h-20 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <h2 className="text-3xl font-black text-white mb-4 tracking-tight">تم حظر حسابك</h2>
+          <p className="text-slate-400 mb-8 leading-relaxed">
+            عذراً، لقد تم حظر حسابك لمخالفتك شروط الاستخدام. إذا كنت تعتقد أن هذا خطأ، يرجى التواصل مع الدعم الفني.
+          </p>
+          <button
+            onClick={() => logout()}
+            className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-4 rounded-xl transition-all"
+          >
+            تسجيل الخروج
+          </button>
+        </div>
+      </div>
+    );
   }
 
   // Removed blocking auth check to allow public access

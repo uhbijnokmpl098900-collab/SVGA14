@@ -76,6 +76,8 @@ export interface UserRecord {
   freeAttempts: number;
   createdAt: any;
   lastLogin: any;
+  lastIp?: string;
+  deviceId?: string;
   allowedExportFormat?: string | string[]; // Restrict user to specific format(s)
   hasSvgaExAccess?: boolean; // Per-user access to SVGA 2.0 EX
 }
