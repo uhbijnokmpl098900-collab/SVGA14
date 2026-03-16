@@ -12,7 +12,6 @@ export const useAccessControl = () => {
 
     // 1. Check VIP/Subscription
     if (currentUser.isVIP) {
-      await logActivity(currentUser, featureName, 'VIP Access');
       return { allowed: true };
     }
 
@@ -20,7 +19,6 @@ export const useAccessControl = () => {
     if (currentUser.subscriptionExpiry) {
        const expiryDate = currentUser.subscriptionExpiry.toDate ? currentUser.subscriptionExpiry.toDate() : new Date(currentUser.subscriptionExpiry);
        if (expiryDate > new Date()) {
-          await logActivity(currentUser, featureName, 'Active Subscription');
           return { allowed: true };
        }
     }
@@ -28,12 +26,12 @@ export const useAccessControl = () => {
     // 3. Check Free Attempts
     if (currentUser.freeAttempts > 0) {
       try {
-        // Decrement free attempts
+        // Decrement free attempts in background
         const userRef = doc(db, 'users', currentUser.id);
-        await updateDoc(userRef, {
+        updateDoc(userRef, {
           freeAttempts: increment(-1)
-        });
-        await logActivity(currentUser, featureName, `Free Trial (${currentUser.freeAttempts - 1} remaining)`);
+        }).catch(e => console.error("Background update failed:", e));
+        
         return { allowed: true };
       } catch (e) {
         console.error("Error updating free attempts:", e);

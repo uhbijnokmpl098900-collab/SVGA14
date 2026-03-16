@@ -471,11 +471,6 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
       const file = e.target.files?.[0];
       if (!file) return;
 
-      // Log Upload Activity
-      if (currentUser) {
-        logActivity(currentUser, 'upload', `Uploaded file: ${file.name}`);
-      }
-
       // Use the toggle state instead of confirm dialog if possible, or fallback to confirm if not set
       let isVap = isVapMode;
       if (!isVap) {
@@ -4157,7 +4152,7 @@ if (!this.JSON) { this.JSON = {}; }
     else if (currentFormat === 'SVGA 2.0 EX') {
         await handleSvgaExExport({
             metadata, videoWidth, videoHeight, exportScale, svgaScale, svgaPos,
-            layerImages, assetColors, assetColorModes, deletedKeys, customLayers, watermark,
+            layerImages, assetColors, assetColorModes, deletedKeys, layerDisplayNames, customLayers, watermark,
             wmScale, wmPos, audioUrl, audioFile, originalAudioUrl, fadeConfig,
             applyTransparencyEffects, setProgress, setExportPhase, setIsExporting,
             protobuf, globalQuality
@@ -4593,6 +4588,11 @@ if (!this.JSON) { this.JSON = {}; }
 
                 if (message.sprites) {
                     message.sprites = message.sprites.filter((s: any) => !deletedKeys.has(s.imageKey));
+                    message.sprites.forEach((sprite: any) => {
+                        if (layerDisplayNames[sprite.imageKey]) {
+                            sprite.name = layerDisplayNames[sprite.imageKey];
+                        }
+                    });
                 }
                 if (message.images) {
                     deletedKeys.forEach(key => {
@@ -5489,7 +5489,11 @@ if (!this.JSON) { this.JSON = {}; }
                                                 <button onClick={(e) => { e.stopPropagation(); handleMoveSprite(key, 'down'); }} className="flex-1 py-1.5 bg-white/5 rounded-lg text-[8px] text-slate-400 hover:text-white hover:bg-white/10">⬇️ خلف</button>
                                                 <button onClick={(e) => { e.stopPropagation(); handleMoveSprite(key, 'up'); }} className="flex-1 py-1.5 bg-white/5 rounded-lg text-[8px] text-slate-400 hover:text-white hover:bg-white/10">⬆️ أمام</button>
                                             </div>
-                                            <button onClick={() => handleBakeLayer(key)} className="w-full py-1.5 bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 rounded-lg text-[8px] font-black uppercase hover:bg-indigo-500/30">تحويل متسلسل (Bake)</button>
+                                             <button onClick={() => {
+                                                 const newName = prompt("أدخل اسم جديد للطبقة:", layerDisplayNames[key] || key);
+                                                 if (newName) setLayerDisplayNames(prev => ({ ...prev, [key]: newName }));
+                                             }} className="w-full py-1.5 bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded-lg text-[8px] font-black uppercase hover:bg-amber-500/30">إعادة تسمية</button>
+
                                             <button onClick={() => handleOpenFadeModal(key)} className="w-full py-1.5 bg-purple-500/20 text-purple-400 border border-purple-500/30 rounded-lg text-[8px] font-black uppercase hover:bg-purple-500/30">تلاشي الحواف (Fade)</button>
                                           </div>
                                       )}

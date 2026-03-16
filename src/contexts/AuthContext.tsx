@@ -40,6 +40,7 @@ interface AuthContextType {
   login: (email: string, pass: string) => Promise<void>;
   signup: (email: string, pass: string, name: string) => Promise<void>;
   logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -51,28 +52,77 @@ export const useAuth = () => {
 };
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [currentUser, setCurrentUser] = useState<UserRecord | null>(null);
+  const [currentUser, setCurrentUser] = useState<UserRecord | null>(() => {
+    const cached = localStorage.getItem('currentUser');
+    if (cached) {
+      try {
+        return JSON.parse(cached);
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  });
   const [loading, setLoading] = useState(true);
 
+  // Sync user to localStorage
   useEffect(() => {
-    let unsubscribeDoc: (() => void) | null = null;
+    if (currentUser) {
+      localStorage.setItem('currentUser', JSON.stringify(currentUser));
+    } else {
+      localStorage.removeItem('currentUser');
+    }
+  }, [currentUser]);
 
+  useEffect(() => {
     const unsubscribeAuth = onAuthStateChanged(auth, async (user) => {
-      if (unsubscribeDoc) {
-        unsubscribeDoc();
-        unsubscribeDoc = null;
-      }
-
       if (user) {
-        // Default user data from Auth
-        const isAdmin = user.email === 'admin@demo.com' || user.email === 'aegy238@gmail.com';
+        await refreshUser(user.uid);
+      } else {
+        setCurrentUser(null);
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      unsubscribeAuth();
+    };
+  }, []);
+
+  const refreshUser = async (uid?: string) => {
+    const targetUid = uid || currentUser?.id;
+    if (!targetUid) return;
+
+    try {
+      const userDocRef = doc(db, 'users', targetUid);
+      const docSnap = await getDoc(userDocRef);
+
+      if (docSnap.exists()) {
+        const data = docSnap.data();
         const deviceId = getDeviceId();
         const ip = await getClientIp();
+
+        // Update metadata if changed, but don't loop
+        if (data.deviceId !== deviceId || data.lastIp !== ip) {
+          await updateDoc(userDocRef, { 
+            deviceId, 
+            lastIp: ip, 
+            lastLogin: new Date() 
+          }).catch(e => console.warn("Failed to update user metadata:", e));
+        }
+        
+        const userData = { id: targetUid, ...data } as UserRecord;
+        setCurrentUser(userData);
+      } else if (uid) {
+        // Only create if we have a fresh UID from onAuthStateChanged
+        const deviceId = getDeviceId();
+        const ip = await getClientIp();
+        const isAdmin = auth.currentUser?.email === 'admin@demo.com' || auth.currentUser?.email === 'aegy238@gmail.com';
         
         const basicUserData: UserRecord = {
-          id: user.uid,
-          email: user.email || '',
-          name: user.displayName || 'User',
+          id: targetUid,
+          email: auth.currentUser?.email || '',
+          name: auth.currentUser?.displayName || 'User',
           role: isAdmin ? 'admin' : 'user',
           isApproved: true,
           isVIP: false,
@@ -87,42 +137,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           lastIp: ip
         };
 
-        // Listen for real-time updates to the user document
-        const userDocRef = doc(db, 'users', user.uid);
-        unsubscribeDoc = onSnapshot(userDocRef, (docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            // Update IP and Device ID if they changed or are missing
-            if (data.deviceId !== deviceId || data.lastIp !== ip) {
-              updateDoc(userDocRef, { deviceId, lastIp: ip, lastLogin: new Date() }).catch(e => console.warn("Failed to update user metadata:", e));
-            }
-            setCurrentUser({ id: user.uid, ...data } as UserRecord);
-          } else {
-            // If doc doesn't exist, try to create it once
-            setDoc(userDocRef, basicUserData).then(() => {
-              setCurrentUser(basicUserData);
-            }).catch(err => {
-              console.warn("Could not create user document:", err);
-              setCurrentUser(basicUserData);
-            });
-          }
-          setLoading(false);
-        }, (err) => {
-          console.warn("User document snapshot error:", err);
-          setCurrentUser(basicUserData);
-          setLoading(false);
-        });
-      } else {
-        setCurrentUser(null);
-        setLoading(false);
+        await setDoc(userDocRef, basicUserData);
+        setCurrentUser(basicUserData);
       }
-    });
-
-    return () => {
-      unsubscribeAuth();
-      if (unsubscribeDoc) unsubscribeDoc();
-    };
-  }, []);
+    } catch (err) {
+      console.warn("Error refreshing user data:", err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const login = async (email: string, pass: string) => {
     await signInWithEmailAndPassword(auth, email, pass);
@@ -182,7 +205,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ currentUser, loading, login, signup, logout }}>
+    <AuthContext.Provider value={{ currentUser, loading, login, signup, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

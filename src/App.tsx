@@ -32,7 +32,10 @@ const App: React.FC = () => {
   const { checkAccess } = useAccessControl();
   const [state, setState] = useState<AppState>(AppState.IDLE);
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
-  const [settings, setSettings] = useState<AppSettings | null>(null);
+  const [settings, setSettings] = useState<AppSettings | null>(() => {
+    const cached = localStorage.getItem('appSettings');
+    return cached ? JSON.parse(cached) : null;
+  });
   const [isLoginView, setIsLoginView] = useState(true);
   const [isBannedByIpOrDevice, setIsBannedByIpOrDevice] = useState(false);
   const [banType, setBanType] = useState<'ip' | 'device' | 'both' | null>(null);
@@ -96,7 +99,9 @@ const App: React.FC = () => {
         const docRef = doc(db, 'settings', 'global');
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
-          setSettings(docSnap.data() as AppSettings);
+          const data = docSnap.data() as AppSettings;
+          setSettings(data);
+          localStorage.setItem('appSettings', JSON.stringify(data));
         }
       } catch (e) { console.error(e); }
     };
