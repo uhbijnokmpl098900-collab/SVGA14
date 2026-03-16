@@ -118,6 +118,7 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
   const [customLayers, setCustomLayers] = useState<CustomLayer[]>([]);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [layerDisplayNames, setLayerDisplayNames] = useState<Record<string, string>>({});
 
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [originalAudioUrl, setOriginalAudioUrl] = useState<string | null>(null);
@@ -5387,12 +5388,19 @@ if (!this.JSON) { this.JSON = {}; }
                         <h3 className="text-white font-black text-xl uppercase">إدارة الطبقات Quantum</h3>
                         <div className="flex gap-2">
                             {selectedKeys.size > 0 && (
-                                <button onClick={() => {
-                                    const newDeleted = new Set(deletedKeys);
-                                    selectedKeys.forEach(k => newDeleted.add(k));
-                                    setDeletedKeys(newDeleted);
-                                    setSelectedKeys(new Set());
-                                }} className="px-4 py-2 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase shadow-glow-red">حذف المحدد ({selectedKeys.size})</button>
+                                <>
+                                    <div className={`relative w-10 h-10 rounded-xl overflow-hidden border-2 border-white/20`} title="تلوين المحدد">
+                                      <input type="color" onChange={(e) => {
+                                          selectedKeys.forEach(key => handleColorChange(key, e.target.value));
+                                      }} className="absolute inset-[-50%] w-[200%] h-[200%] cursor-pointer bg-transparent border-none" />
+                                    </div>
+                                    <button onClick={() => {
+                                        const newDeleted = new Set(deletedKeys);
+                                        selectedKeys.forEach(k => newDeleted.add(k));
+                                        setDeletedKeys(newDeleted);
+                                        setSelectedKeys(new Set());
+                                    }} className="px-4 py-2 bg-red-500 text-white rounded-xl text-[10px] font-black uppercase shadow-glow-red">حذف المحدد ({selectedKeys.size})</button>
+                                </>
                             )}
                             <button onClick={() => layerInputRef.current?.click()} className="px-4 py-2 bg-sky-500 text-white rounded-xl text-[10px] font-black uppercase shadow-glow-sky">+ إضافة طبقة</button>
                         </div>
@@ -5433,16 +5441,31 @@ if (!this.JSON) { this.JSON = {}; }
                         {filteredKeys.map(key => (
                             <div 
                                 key={key} 
-                                onClick={() => {
-                                    // Exclusive selection for easier editing
-                                    setSelectedKeys(new Set([key]));
-                                    setActiveSideTab('transforms');
+                                onClick={(e) => {
+                                    if (e.ctrlKey || e.metaKey) {
+                                        const newSelected = new Set(selectedKeys);
+                                        if (newSelected.has(key)) newSelected.delete(key);
+                                        else newSelected.add(key);
+                                        setSelectedKeys(newSelected);
+                                    } else {
+                                        setSelectedKeys(new Set([key]));
+                                        setActiveSideTab('transforms');
+                                    }
                                 }}
                                 className={`group bg-slate-900/30 rounded-[2rem] border p-4 transition-all duration-300 relative cursor-pointer ${selectedKeys.has(key) ? 'border-sky-500 bg-sky-500/10' : deletedKeys.has(key) ? 'border-red-500/50 grayscale opacity-40' : 'border-white/[0.03]'}`}
                             >
                                 <div className="aspect-square rounded-2xl bg-black/40 flex items-center justify-center relative overflow-hidden">
                                    {layerImages[key] && <img src={layerImages[key]} className="max-w-[70%] max-h-[70%] object-contain" style={{ filter: assetColors[key] ? `drop-shadow(0 0 2px ${assetColors[key]})` : 'none' }} />}
-                                   <div className="absolute top-2 right-2 w-5 h-5 rounded-full border border-white/20 flex items-center justify-center bg-black/40">
+                                   <div 
+                                      className="absolute top-2 right-2 w-5 h-5 rounded-full border border-white/20 flex items-center justify-center bg-black/40 z-10" 
+                                      onClick={(e) => {
+                                          e.stopPropagation();
+                                          const newSelected = new Set(selectedKeys);
+                                          if (newSelected.has(key)) newSelected.delete(key);
+                                          else newSelected.add(key);
+                                          setSelectedKeys(newSelected);
+                                      }}
+                                   >
                                       {selectedKeys.has(key) && <div className="w-3 h-3 bg-sky-500 rounded-full"></div>}
                                    </div>
                                    <div className="absolute inset-0 bg-slate-950/90 opacity-0 group-hover:opacity-100 transition-all flex flex-col items-center justify-center gap-2 backdrop-blur-md px-2" onClick={(e) => e.stopPropagation()}>
@@ -5473,7 +5496,7 @@ if (!this.JSON) { this.JSON = {}; }
                                       <button onClick={() => handleDeleteAsset(key)} className={`w-full py-1.5 ${deletedKeys.has(key) ? 'bg-emerald-500' : 'bg-red-500'} text-white rounded-lg text-[8px] font-black uppercase`}>{deletedKeys.has(key) ? 'استعادة' : 'حذف'}</button>
                                    </div>
                                 </div>
-                                <span className="mt-2 text-[8px] text-slate-500 font-black block text-center uppercase truncate">{key}</span>
+                                <span className="mt-2 text-[8px] text-slate-500 font-black block text-center uppercase truncate">{layerDisplayNames[key] || key}</span>
                             </div>
                         ))}
                     </div>
