@@ -2322,7 +2322,6 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
         },
         sprites: sprites.map((s: any, sIdx: number) => {
           const allFrames: any[] = [];
-          let lastFrame: any = null;
           
           s.frames.forEach((f: any, fIdx: number) => {
             const currentFrameData = {
@@ -2343,37 +2342,12 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
                 ty: round(f.transform.ty)
               } : null
             };
-
-            // Optimization: Only add keyframe if it's the first frame, or if values changed
-            // This drastically reduces manifest size and AE script execution time
-            let changed = true;
-            if (lastFrame) {
-                const t1 = lastFrame.t;
-                const t2 = currentFrameData.t;
-                const tChanged = (t1 === null && t2 !== null) || 
-                                 (t1 !== null && t2 === null) || 
-                                 (t1 !== null && t2 !== null && (
-                                    t1.a !== t2.a || t1.b !== t2.b || t1.c !== t2.c || t1.d !== t2.d || t1.tx !== t2.tx || t1.ty !== t2.ty
-                                 ));
-
-                changed = lastFrame.a !== currentFrameData.a ||
-                          lastFrame.l.x !== currentFrameData.l.x ||
-                          lastFrame.l.y !== currentFrameData.l.y ||
-                          lastFrame.l.w !== currentFrameData.l.w ||
-                          lastFrame.l.h !== currentFrameData.l.h ||
-                          !!tChanged;
-            }
-
-            if (fIdx === 0 || changed) {
-                allFrames.push(currentFrameData);
-                lastFrame = currentFrameData;
-            }
+            allFrames.push(currentFrameData);
           });
 
           return {
             imageKey: s.imageKey || `layer_${sIdx}`,
             matteKey: s.matteKey || null,
-            matteType: s.matteType || 0,
             blendMode: s.blendMode || null,
             hasShapes: !!(s.shapes && s.shapes.length > 0),
             keyframes: allFrames
@@ -2413,11 +2387,6 @@ if (!this.JSON) { this.JSON = {}; }
 
     app.beginUndoGroup("Quantum SVGA Rebuild v7.0");
     
-    var progressWin = new Window("palette", "Quantum Rebuild Progress", undefined, {closeButton: false});
-    progressWin.pBar = progressWin.add("progressbar", [20, 20, 300, 40], 0, data.sprites.length);
-    progressWin.stText = progressWin.add("statictext", [20, 50, 300, 70], "Preparing assets...");
-    progressWin.show();
-
     var compDuration = data.frames / data.fps;
     if (compDuration <= 0) compDuration = 1/data.fps;
     
@@ -2434,7 +2403,7 @@ if (!this.JSON) { this.JSON = {}; }
     if (!assetsFolder.exists) {
         assetsFolder = Folder.selectDialog("Select the 'assets' folder");
     }
-    if (!assetsFolder) { progressWin.close(); app.endUndoGroup(); return; }
+    if (!assetsFolder) { app.endUndoGroup(); return; }
 
     // Import Audio
     if (data.adjustments.audio.exists) {
@@ -2449,7 +2418,6 @@ if (!this.JSON) { this.JSON = {}; }
     }
 
     var layerMap = {};
-    var footageMap = {};
     var blendMap = {
         "ADD": BlendingMode.ADD,
         "SCREEN": BlendingMode.SCREEN,
@@ -2470,31 +2438,19 @@ if (!this.JSON) { this.JSON = {}; }
         var layer;
         var footage;
 
-        progressWin.pBar.value = i + 1;
-        progressWin.stText.text = "Building Layer " + (i + 1) + " of " + data.sprites.length + "...";
-        progressWin.update();
-
         if (sprite.imageKey) {
-            if (footageMap[sprite.imageKey]) {
-                footage = footageMap[sprite.imageKey];
-            } else {
-                var imgFile = File(assetsFolder.fsName + "/" + sprite.imageKey + ".png");
-                if (imgFile.exists) {
-                    try {
-                        footage = app.project.importFile(new ImportOptions(imgFile));
-                        footageMap[sprite.imageKey] = footage;
-                    } catch(e) {
-                        $.writeln("Failed to import: " + imgFile.fsName);
-                    }
+            var imgFile = File(assetsFolder.fsName + "/" + sprite.imageKey + ".png");
+            if (imgFile.exists) {
+                try {
+                    footage = app.project.importFile(new ImportOptions(imgFile));
+                    layer = mainComp.layers.add(footage);
+                    layer.anchorPoint.setValue([0, 0]);
+                } catch(e) {
+                    $.writeln("Failed to import: " + imgFile.fsName);
                 }
             }
         }
         
-        if (footage) {
-            layer = mainComp.layers.add(footage);
-            layer.anchorPoint.setValue([0, 0]);
-        }
-
         if (!layer) {
             // Create a placeholder for shape layers or missing assets
             var layerName = "Layer_" + i + (sprite.imageKey ? "_" + sprite.imageKey : "_Shape");
@@ -2509,9 +2465,6 @@ if (!this.JSON) { this.JSON = {}; }
         }
 
         layer.name = "Layer_" + i + "_" + (sprite.imageKey || "Shape");
-        if (sprite.blendMode === "ADD" || sprite.blendMode === "SCREEN") {
-            layer.name = "[SHINY]_" + layer.name;
-        }
         layer.parent = masterNull;
         layerMap[i] = layer;
 
@@ -2521,12 +2474,6 @@ if (!this.JSON) { this.JSON = {}; }
         
         var fd = mainComp.frameDuration;
         
-        var times = [];
-        var opVals = [];
-        var posVals = [];
-        var scaleVals = [];
-        var rotVals = [];
-
         for (var k = 0; k < sprite.keyframes.length; k++) {
             var kf = sprite.keyframes[k];
             var time = kf.f * fd;
@@ -2551,38 +2498,39 @@ if (!this.JSON) { this.JSON = {}; }
             var Mtx = a * kf.l.x + c * kf.l.y + tx;
             var Mty = b * kf.l.x + d * kf.l.y + ty;
 
-            var scaleX = Math.sqrt(Ma * Ma + Mb * Mb);
+            var finalX, finalY;
+            var scaleX = 100;
+            var scaleY = 100;
+            var rot = 0;
+            
+            var opKey = layer.opacity.addKey(time);
+            layer.opacity.setValueAtKey(opKey, kf.a * 100);
+            layer.opacity.setInterpolationTypeAtKey(opKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+            
+            scaleX = Math.sqrt(Ma * Ma + Mb * Mb);
             var det = Ma * Md - Mb * Mc;
-            var scaleY = det / (scaleX || 1e-6);
-            var rot = Math.atan2(Mb, Ma) * 180 / Math.PI;
+            scaleY = det / (scaleX || 1e-6);
+            rot = Math.atan2(Mb, Ma) * 180 / Math.PI;
             
-            times.push(time);
-            opVals.push(kf.a * 100);
-            posVals.push([Mtx, Mty]);
-            scaleVals.push([scaleX * 100, scaleY * 100]);
-            rotVals.push(rot);
-        }
-
-        if (times.length > 0) {
-            layer.opacity.setValuesAtTimes(times, opVals);
-            layer.position.setValuesAtTimes(times, posVals);
-            layer.scale.setValuesAtTimes(times, scaleVals);
-            layer.rotation.setValuesAtTimes(times, rotVals);
+            scaleX *= 100;
+            scaleY *= 100;
             
-            // Set HOLD interpolation only if there are multiple keys
-            if (times.length > 1) {
-                for (var k = 1; k <= times.length; k++) {
-                    layer.opacity.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-                    layer.position.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-                    layer.scale.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-                    layer.rotation.setInterpolationTypeAtKey(k, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
-                }
-            }
+            finalX = Mtx;
+            finalY = Mty;
+            
+            var scaleKey = layer.scale.addKey(time);
+            layer.scale.setValueAtKey(scaleKey, [scaleX, scaleY]);
+            layer.scale.setInterpolationTypeAtKey(scaleKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+            
+            var rotKey = layer.rotation.addKey(time);
+            layer.rotation.setValueAtKey(rotKey, rot);
+            layer.rotation.setInterpolationTypeAtKey(rotKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+            
+            var posKey = layer.position.addKey(time);
+            layer.position.setValueAtKey(posKey, [finalX, finalY]);
+            layer.position.setInterpolationTypeAtKey(posKey, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
         }
     }
-
-    progressWin.stText.text = "Applying track mattes...";
-    progressWin.update();
 
     // Apply Track Mattes (Professional Duplicate Logic for multi-use mattes)
     // We process in reverse to maintain correct stack order during duplication
@@ -2608,14 +2556,7 @@ if (!this.JSON) { this.JSON = {}; }
                     matteInstance.name = "[MATTE]_" + originalMatteLayer.name;
                     matteInstance.moveBefore(targetLayer);
                     matteInstance.parent = originalMatteLayer.parent;
-                    
-                    // Map SVGA matteType to AE TrackMatteType
-                    var mType = s.matteType || 1; // Default to Alpha if not specified
-                    if (mType === 1) targetLayer.trackMatteType = TrackMatteType.ALPHA;
-                    else if (mType === 2) targetLayer.trackMatteType = TrackMatteType.ALPHA_INVERTED;
-                    else if (mType === 3) targetLayer.trackMatteType = TrackMatteType.LUMA;
-                    else if (mType === 4) targetLayer.trackMatteType = TrackMatteType.LUMA_INVERTED;
-                    else targetLayer.trackMatteType = TrackMatteType.ALPHA;
+                    targetLayer.trackMatteType = TrackMatteType.ALPHA;
                     
                     // Hide the original matte layer if it's purely a mask source
                     // SVGA usually uses separate sprites for masks
@@ -2636,7 +2577,6 @@ if (!this.JSON) { this.JSON = {}; }
         }
     }
 
-    progressWin.close();
     app.endUndoGroup();
     alert("✅ Animation Rebuild Complete (v7.0 ULTRA)!\\nLayers: " + data.sprites.length + "\\nCheck Info panel for any missing assets.");
 })();
