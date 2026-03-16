@@ -531,8 +531,15 @@ export const Workspace: React.FC<WorkspaceProps> = ({ metadata: initialMetadata,
         const list: PresetBackground[] = [];
         querySnapshot.forEach((doc) => list.push({ id: doc.id, ...doc.data() } as PresetBackground));
         setPresetBgs(list);
-      } catch (e) {
-        console.error("Error fetching backgrounds:", e);
+        localStorage.setItem('presetBackgrounds', JSON.stringify(list));
+      } catch (e: any) {
+        if (e.code === 'resource-exhausted') {
+          console.warn("Quota exceeded. Using cached backgrounds.");
+          const cached = localStorage.getItem('presetBackgrounds');
+          if (cached) setPresetBgs(JSON.parse(cached));
+        } else {
+          console.error("Error fetching backgrounds:", e);
+        }
       }
     };
     fetchBackgrounds();

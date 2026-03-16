@@ -104,7 +104,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         // Update metadata if changed, but don't loop
         if (data.deviceId !== deviceId || data.lastIp !== ip) {
-          await updateDoc(userDocRef, { 
+          updateDoc(userDocRef, { 
             deviceId, 
             lastIp: ip, 
             lastLogin: new Date() 
@@ -140,8 +140,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         await setDoc(userDocRef, basicUserData);
         setCurrentUser(basicUserData);
       }
-    } catch (err) {
-      console.warn("Error refreshing user data:", err);
+    } catch (err: any) {
+      if (err.code === 'resource-exhausted') {
+        console.warn("Quota exceeded in refreshUser. Using cached user data.");
+      } else {
+        console.warn("Error refreshing user data:", err);
+      }
     } finally {
       setLoading(false);
     }
