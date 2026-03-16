@@ -3,7 +3,8 @@ import { UserRecord, AppSettings, LicenseKey, PresetBackground, SubscriptionType
 import { db, storage } from '../lib/firebase';
 import { collection, getDocs, doc, updateDoc, addDoc, deleteDoc, query, orderBy, Timestamp, setDoc, getDoc, limit } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
-import { Users, Key, Image as ImageIcon, Settings as SettingsIcon, Trash2, Ban, CheckCircle, Upload, RefreshCw, X, FileText, Link as LinkIcon, BadgeCheck, Wifi, Smartphone } from 'lucide-react';
+import { StoreManager } from './StoreManager';
+import { Users, Key, Image as ImageIcon, Settings as SettingsIcon, Trash2, Ban, CheckCircle, Upload, RefreshCw, X, FileText, Link as LinkIcon, BadgeCheck, Wifi, Smartphone, Store } from 'lucide-react';
 
 interface AdminPanelProps {
   currentUser: UserRecord | null;
@@ -355,6 +356,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
         {/* Sidebar */}
         <div className="w-full lg:w-64 bg-slate-950/50 border-b lg:border-b-0 lg:border-l border-white/10 flex flex-row lg:flex-col p-2 sm:p-4 gap-1 sm:gap-2 overflow-x-auto custom-scrollbar no-scrollbar">
           <NavButton active={activeTab === 'users'} onClick={() => setActiveTab('users')} icon={<Users />} label="المستخدمين" />
+          <NavButton active={activeTab === 'store'} onClick={() => setActiveTab('store')} icon={<Store />} label="المتجر" />
           <NavButton active={activeTab === 'keys'} onClick={() => setActiveTab('keys')} icon={<Key />} label="الاشتراكات" />
           <NavButton active={activeTab === 'assets'} onClick={() => setActiveTab('assets')} icon={<ImageIcon />} label="الوسائط" />
           <NavButton active={activeTab === 'records'} onClick={() => setActiveTab('records')} icon={<FileText />} label="السجلات" />
@@ -369,6 +371,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
             </div>
           ) : (
             <>
+              {activeTab === 'store' && <StoreManager />}
               {activeTab === 'users' && (
                 <div className="space-y-6">
                   <h3 className="text-xl font-bold mb-4">إدارة المستخدمين</h3>

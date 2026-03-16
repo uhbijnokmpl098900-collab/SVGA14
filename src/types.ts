@@ -25,6 +25,8 @@ export enum AppState {
 
 export type SubscriptionType = 'day' | 'week' | 'month' | 'year' | 'none';
 
+export const PRODUCT_CATEGORIES = ['القسم الرئيسي', 'إطارات', 'دخوليات', 'هدايا', 'VIP', 'إيموشنات'];
+
 export interface StoreCategory {
   id: string;
   name: string;
