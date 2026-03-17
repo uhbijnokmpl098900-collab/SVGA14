@@ -32,10 +32,7 @@ const App: React.FC = () => {
   const { checkAccess } = useAccessControl();
   const [state, setState] = useState<AppState>(AppState.IDLE);
   const [fileMetadata, setFileMetadata] = useState<FileMetadata | null>(null);
-  const [settings, setSettings] = useState<AppSettings | null>(() => {
-    const cached = localStorage.getItem('appSettings');
-    return cached ? JSON.parse(cached) : null;
-  });
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [isLoginView, setIsLoginView] = useState(true);
   const [isBannedByIpOrDevice, setIsBannedByIpOrDevice] = useState(false);
   const [banType, setBanType] = useState<'ip' | 'device' | 'both' | null>(null);
@@ -59,53 +56,49 @@ const App: React.FC = () => {
   };
 
   useEffect(() => {
-    // Check for IP or Device Ban - Optimized to run once and handle quota errors
+    // Check for IP or Device Ban
     const checkBans = async () => {
-      const cachedBan = sessionStorage.getItem('banChecked');
-      if (cachedBan) return;
-
       try {
+        // Get IP
         const ipRes = await fetch('/api/ip');
         const { ip } = await ipRes.json();
         const ipDocId = ip.replace(/\./g, '_');
+        
+        // Get Device ID
         const deviceId = localStorage.getItem('deviceId');
         
         const [ipBan, deviceBan] = await Promise.all([
-          getDoc(doc(db, 'banned_ips', ipDocId)).catch(() => ({ exists: () => false })),
-          deviceId ? getDoc(doc(db, 'banned_devices', deviceId)).catch(() => ({ exists: () => false })) : Promise.resolve({ exists: () => false })
+          getDoc(doc(db, 'banned_ips', ipDocId)),
+          deviceId ? getDoc(doc(db, 'banned_devices', deviceId)) : Promise.resolve({ exists: () => false })
         ]);
 
-        if (ipBan.exists() || deviceBan.exists()) {
+        if (ipBan.exists() && deviceBan.exists()) {
           setIsBannedByIpOrDevice(true);
-          setBanType(ipBan.exists() && deviceBan.exists() ? 'both' : ipBan.exists() ? 'ip' : 'device');
+          setBanType('both');
+        } else if (ipBan.exists()) {
+          setIsBannedByIpOrDevice(true);
+          setBanType('ip');
+        } else if (deviceBan.exists()) {
+          setIsBannedByIpOrDevice(true);
+          setBanType('device');
         }
-        sessionStorage.setItem('banChecked', 'true');
       } catch (e) {
-        console.warn("Ban check skipped due to network/quota issues:", e);
+        console.error("Ban check error:", e);
       }
     };
     checkBans();
   }, []);
 
-  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
-
   useEffect(() => {
-    // Load Global Settings - Use cache immediately on failure
+    // Load Global Settings
     const loadSettings = async () => {
       try {
         const docRef = doc(db, 'settings', 'global');
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
-          const data = docSnap.data() as AppSettings;
-          setSettings(data);
-          localStorage.setItem('appSettings', JSON.stringify(data));
+          setSettings(docSnap.data() as AppSettings);
         }
-      } catch (e: any) { 
-        if (e.code === 'resource-exhausted') {
-          setIsQuotaExceeded(true);
-          console.warn("Firestore Quota Exceeded. Using cached settings.");
-        }
-      }
+      } catch (e) { console.error(e); }
     };
     loadSettings();
   }, []);
@@ -361,12 +354,6 @@ const App: React.FC = () => {
     <div className="min-h-screen text-slate-200 overflow-x-hidden relative" style={dynamicBgStyle}>
       {!settings?.backgroundUrl && <div className="fixed inset-0 bg-[#020617] -z-10" />}
       
-      {isQuotaExceeded && (
-        <div className="fixed top-0 left-0 right-0 bg-amber-500/90 backdrop-blur-sm text-black py-1 px-4 text-center text-[10px] font-bold z-[300] flex items-center justify-center gap-2">
-          <span>⚠️ تم تجاوز حصة الاستخدام اليومية للسيرفر. الموقع يعمل الآن بالوضع الاحتياطي (Offline Mode).</span>
-        </div>
-      )}
-
       <Header 
         onLogoClick={handleReset} 
         isAdmin={currentUser?.role === 'admin'} 

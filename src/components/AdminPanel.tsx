@@ -24,9 +24,6 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
   const [backgrounds, setBackgrounds] = useState<PresetBackground[]>([]);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
-  const [cache, setCache] = useState<Record<string, { data: any, timestamp: number }>>({});
-
-  const CACHE_DURATION = 30000; // 30 seconds
 
   // URL Input States
   const [logoUrlInput, setLogoUrlInput] = useState('');
@@ -39,82 +36,44 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({ currentUser, onCancel })
   }, [activeTab]);
 
   const fetchData = async () => {
-    const now = Date.now();
-    if (cache[activeTab] && (now - cache[activeTab].timestamp) < CACHE_DURATION) {
-      const cached = cache[activeTab].data;
-      if (activeTab === 'users') {
-        setUsers(cached.users);
-        setBannedIps(cached.bannedIps);
-        setBannedDevices(cached.bannedDevices);
-      } else if (activeTab === 'keys') {
-        setKeys(cached);
-      } else if (activeTab === 'assets') {
-        setBackgrounds(cached.backgrounds);
-        setSettings(cached.settings);
-        setLogoUrlInput(cached.settings.logoUrl || '');
-        setBgUrlInput(cached.settings.backgroundUrl || '');
-      } else if (activeTab === 'settings') {
-        setSettings(cached);
-      } else if (activeTab === 'records') {
-        setLogs(cached);
-      }
-      return;
-    }
-
     setLoading(true);
     try {
       if (activeTab === 'users') {
         const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'));
         const snapshot = await getDocs(q);
-        const usersData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as UserRecord));
-        setUsers(usersData);
+        setUsers(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as UserRecord)));
 
         // Fetch banned IPs and Devices
         const [ipSnap, deviceSnap] = await Promise.all([
           getDocs(collection(db, 'banned_ips')),
           getDocs(collection(db, 'banned_devices'))
         ]);
-        const ips = ipSnap.docs.map(d => d.data().ip);
-        const devices = deviceSnap.docs.map(d => d.id);
-        setBannedIps(ips);
-        setBannedDevices(devices);
-        
-        setCache(prev => ({ ...prev, users: { data: { users: usersData, bannedIps: ips, bannedDevices: devices }, timestamp: now } }));
+        setBannedIps(ipSnap.docs.map(d => d.data().ip));
+        setBannedDevices(deviceSnap.docs.map(d => d.id));
       } else if (activeTab === 'keys') {
         const q = query(collection(db, 'licenseKeys'), orderBy('createdAt', 'desc'));
         const snapshot = await getDocs(q);
-        const keysData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as LicenseKey));
-        setKeys(keysData);
-        setCache(prev => ({ ...prev, keys: { data: keysData, timestamp: now } }));
+        setKeys(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as LicenseKey)));
       } else if (activeTab === 'assets') {
         const q = query(collection(db, 'presetBackgrounds'), orderBy('createdAt', 'desc'));
         const snapshot = await getDocs(q);
-        const backgroundsData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as PresetBackground));
-        setBackgrounds(backgroundsData);
-        
+        setBackgrounds(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as PresetBackground)));
+        // Also fetch settings for logo/bg
         const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
-        let settingsData = null;
         if (settingsDoc.exists()) {
-            settingsData = settingsDoc.data() as AppSettings;
-            setSettings(settingsData);
-            setLogoUrlInput(settingsData.logoUrl || '');
-            setBgUrlInput(settingsData.backgroundUrl || '');
+            const data = settingsDoc.data() as AppSettings;
+            setSettings(data);
+            setLogoUrlInput(data.logoUrl || '');
+            setBgUrlInput(data.backgroundUrl || '');
         }
-        setCache(prev => ({ ...prev, assets: { data: { backgrounds: backgroundsData, settings: settingsData }, timestamp: now } }));
       } else if (activeTab === 'settings') {
         const docRef = doc(db, 'settings', 'global');
         const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          const settingsData = docSnap.data() as AppSettings;
-          setSettings(settingsData);
-          setCache(prev => ({ ...prev, settings: { data: settingsData, timestamp: now } }));
-        }
+        if (docSnap.exists()) setSettings(docSnap.data() as AppSettings);
       } else if (activeTab === 'records') {
         const q = query(collection(db, 'activityLogs'), orderBy('timestamp', 'desc'), limit(100));
         const snapshot = await getDocs(q);
-        const logsData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ActivityLog));
-        setLogs(logsData);
-        setCache(prev => ({ ...prev, records: { data: logsData, timestamp: now } }));
+        setLogs(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as ActivityLog)));
       }
     } catch (error) {
       console.error("Error fetching data:", error);

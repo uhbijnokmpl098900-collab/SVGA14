@@ -78,16 +78,7 @@ export const Store: React.FC<StoreProps> = ({ currentUser, onLoginRequired }) =>
               </div>
               <div className="p-5">
                 <h3 className="font-bold text-lg mb-1">{product.name}</h3>
-                <div className="flex flex-wrap gap-1 mb-4">
-                    {product.supportedFormats?.slice(0, 3).map(format => (
-                        <span key={format} className="px-2 py-0.5 bg-indigo-500/20 text-indigo-300 rounded text-[10px] font-medium border border-indigo-500/30">
-                            {format}
-                        </span>
-                    ))}
-                    {product.supportedFormats && product.supportedFormats.length > 3 && (
-                        <span className="px-2 py-0.5 bg-slate-800 text-slate-400 rounded text-[10px]">+{product.supportedFormats.length - 3}</span>
-                    )}
-                </div>
+                <p className="text-slate-400 text-sm mb-4">{product.description}</p>
                 <div className="flex items-center justify-between">
                   <span className="text-indigo-400 font-bold">${product.price}</span>
                   <button 

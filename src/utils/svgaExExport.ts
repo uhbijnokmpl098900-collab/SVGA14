@@ -17,7 +17,6 @@ export const handleSvgaExExport = async (params: {
     assetColors: Record<string, string>,
     assetColorModes: Record<string, 'tint' | 'fill'>,
     deletedKeys: Set<string>,
-    layerDisplayNames: Record<string, string>,
     customLayers: any[],
     watermark: string | null,
     wmScale: number,
@@ -35,7 +34,7 @@ export const handleSvgaExExport = async (params: {
 }) => {
     const {
         metadata, videoWidth, videoHeight, exportScale, svgaScale, svgaPos,
-        layerImages, assetColors, assetColorModes, deletedKeys, layerDisplayNames, customLayers, watermark,
+        layerImages, assetColors, assetColorModes, deletedKeys, customLayers, watermark,
         wmScale, wmPos, audioUrl, audioFile, originalAudioUrl, fadeConfig,
         applyTransparencyEffects, setProgress, setExportPhase, setIsExporting,
         protobuf, globalQuality
@@ -236,9 +235,6 @@ export const handleSvgaExExport = async (params: {
 
         if (message.sprites) {
             message.sprites.forEach((sprite: any) => {
-                if (layerDisplayNames[sprite.imageKey]) {
-                    sprite.name = layerDisplayNames[sprite.imageKey];
-                }
                 if (sprite.frames) {
                     sprite.frames.forEach((frame: any) => {
                         const cx = videoWidth / 2;
